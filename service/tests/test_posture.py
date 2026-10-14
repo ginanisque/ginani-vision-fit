@@ -83,6 +83,16 @@ def test_front_orientation_via_depth_when_face_is_hidden():
     assert view_orientation(pose) == "front"
 
 
+def test_back_view_with_narrow_hips_is_still_back():
+    # MediaPipe hip landmarks read narrower from behind (they follow the front iliac
+    # crest), so a back view must not fall into 'unknown' when hip width is small.
+    pose = front_landmarks()
+    pose["left_hip"] = lm(0.48, 0.55)
+    pose["right_hip"] = lm(0.52, 0.55)
+    pose["nose"] = Landmark(x=0.50, y=0.10, visibility=1.0, z=0.20)
+    assert view_orientation(pose) == "back"
+
+
 def test_head_to_feet_pass():
     assert head_to_feet_completeness(front_landmarks())["status"] == "pass"
 

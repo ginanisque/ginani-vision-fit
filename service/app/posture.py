@@ -144,10 +144,12 @@ def view_orientation(landmarks: dict[str, Landmark]) -> str:
     if not _visible(landmarks, "left_shoulder", "right_shoulder", "left_hip", "right_hip"):
         return "unknown"
     shoulder_width = abs(landmarks["left_shoulder"].x - landmarks["right_shoulder"].x)
-    hip_width = abs(landmarks["left_hip"].x - landmarks["right_hip"].x)
 
-    if shoulder_width >= POSTURE_THRESHOLDS["minShoulderWidth"] and hip_width >= POSTURE_THRESHOLDS["minHipWidth"]:
-        # Both shoulders and hips spread: facing toward or away from the camera.
+    # Shoulder width is the reliable front/back-vs-side signal. Hip width is NOT
+    # used as a hard gate because MediaPipe's hip landmarks (front iliac crest) read
+    # noticeably narrower from behind, which would misclassify back views as unknown.
+    if shoulder_width >= POSTURE_THRESHOLDS["minShoulderWidth"]:
+        # Shoulders spread: facing toward or away from the camera.
         return _facing(landmarks)
     if shoulder_width <= POSTURE_THRESHOLDS["maxSideShoulderWidth"]:
         # Shoulders collapse to a narrow spread when the body is edge-on.
