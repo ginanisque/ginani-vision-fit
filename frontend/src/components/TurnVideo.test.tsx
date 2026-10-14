@@ -1,0 +1,68 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { TurnVideo } from './TurnVideo'
+
+afterEach(() => vi.unstubAllGlobals())
+describe('slow-turn workflow', () => {
+  it('handles unsupported camera recording without processing', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Record slow turn' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose an existing video')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+  it('uploads with consent, shows review and clears a replaced result', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id:'v', view:'turn', decision:'review',durationSeconds:10,samples:[{timeSeconds:1,quality:'pass',reasons:[]}],reasons:['Verify a full turn.'],scope:'Sample quality only.' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} />)
+    const user = userEvent.setup()
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'],'turn.webm',{type:'video/webm'}))
+    await user.click(screen.getByRole('button',{name:'Check video'}))
+    expect(await screen.findByText(/Video: review/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/turn-video')
+    expect((fetchMock.mock.calls[0][1].body as FormData).get('consent')).toBe('true')
+    await user.click(screen.getByRole('button',{name:'Clear video'}))
+    expect(screen.queryByText(/Video: review/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button',{name:'Check video'})).toBeDisabled()
+  })
+  it('shows turn coverage evidence when present', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      id: 'v', view: 'turn', decision: 'review', durationSeconds: 12,
+      samples: [{ timeSeconds: 1, quality: 'pass', reasons: [] }],
+      turnCoverage: { status: 'complete', seenViews: ['front', 'back', 'side'], missingViews: [], orientations: [{ timeSeconds: 1, orientation: 'front' }], method: 'pose-landmark orientation' },
+      reasons: ['Confirm a full turn.'], scope: 'coverage.' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} />)
+    const user = userEvent.setup()
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    await screen.findByText(/Video: review/)
+    const coverage = screen.getByText(/Turn coverage:/)
+    expect(coverage.textContent).toContain('complete')
+    expect(coverage.textContent).toContain('front, back, side')
+  })
+  it('shows an actionable message when the service is unreachable', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} />)
+    const user = userEvent.setup()
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Could not reach the analysis service')
+    expect(fetchMock).toHaveBeenCalledWith('/api/turn-video', expect.anything())
+  })
+  it('rejects an oversized video before uploading', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} />)
+    const user = userEvent.setup()
+    const big = new File(['video'], 'turn.webm', { type: 'video/webm' })
+    Object.defineProperty(big, 'size', { value: 51 * 1024 * 1024 })
+    await user.upload(screen.getByLabelText(/choose video/i), big)
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/larger than 50 MB/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

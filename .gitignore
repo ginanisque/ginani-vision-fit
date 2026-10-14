@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.log
+
+# Playwright
+test-results/
+playwright-report/
+
+# MediaPipe pose model (fetched via an explicit step, see service/README.md)
+*.task
