@@ -1,26 +1,46 @@
-"""VisionFit OpenCV processing service.
-
-Exposes consent-gated photo and video checks, plus the original quality endpoint.
-The decision log is in-memory; captures are analyzed but not persisted.
-"""
+"""VisionFit OpenCV service with Neon persistence, Auth, and private storage."""
 from __future__ import annotations
 
 import cv2
 import numpy as np
 import os
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import DEFAULT_THRESHOLDS
 from .decisions import DecisionLog, build_decision
 from .posture import estimate_pose, load_pose, view_orientation
+from .auth import SessionUser, current_user, require_admin, router as auth_router
+from .capture_store import (
+    admin_capture_session, admin_capture_sessions, ensure_session, persist_analysis, recent_decisions,
+)
+from .database import database_health
+from .measurements import router as measurements_router
+from .roboflow import analyze_measurement_capture, configuration_status as roboflow_status
 
 app = FastAPI(title="VisionFit quality service", version="0.1.0")
+app.include_router(auth_router)
+app.include_router(measurements_router)
+
+
+@app.get("/")
+def root() -> dict:
+    return {
+        "service": "Ginani VisionFit API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/api/health",
+        "measurementDefinitions": "/api/measurements/definitions",
+    }
 
 
 def _cors_origins() -> list[str]:
     """Only allow browser origins explicitly configured for this deployment."""
-    value = os.getenv("VISIONFIT_CORS_ORIGINS", "http://localhost:5173")
+    value = os.getenv(
+        "VISIONFIT_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174",
+    )
     return [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]
 
 # Local development convenience: the Vite frontend proxies /api to this service,
@@ -40,7 +60,8 @@ MIN_DIMENSION = 64
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "opencv": cv2.__version__}
+    return {"status": "ok", "opencv": cv2.__version__, "database": "ok" if database_health() else "unavailable",
+            "measurementVision": roboflow_status()}
 
 
 @app.post("/api/quality")
@@ -65,8 +86,21 @@ async def quality(view: str = Form(...), file: UploadFile = File(...)) -> dict:
 
 
 @app.get("/api/decisions")
-def decisions(limit: int = 20) -> dict:
-    return {"records": log.list(limit)}
+def decisions(limit: int = 20, _admin: SessionUser = Depends(require_admin)) -> dict:
+    return {"records": recent_decisions(limit)}
+
+
+@app.get("/api/admin/capture-sessions")
+def capture_sessions(limit: int = 100, _admin: SessionUser = Depends(require_admin)) -> dict:
+    return {"sessions": admin_capture_sessions(limit)}
+
+
+@app.get("/api/admin/capture-sessions/{session_id}")
+def capture_session_detail(session_id: str, _admin: SessionUser = Depends(require_admin)) -> dict:
+    detail = admin_capture_session(session_id)
+    if detail is None:
+        raise HTTPException(404, "Capture session not found")
+    return detail
 
 # VF-2 uses its own endpoint so VF-0's narrower contract remains compatible.
 from .capture import capture_decision
@@ -75,7 +109,11 @@ MAX_CAPTURE_BYTES = 20 * 1024 * 1024
 
 
 @app.post('/api/capture')
-async def capture(view: str = Form(...), consent: bool = Form(False), file: UploadFile = File(...)) -> dict:
+async def capture(
+    view: str = Form(...), consent: bool = Form(False), session_id: str | None = Form(None),
+    height_mm: float | None = Form(None), file: UploadFile = File(...),
+    user: SessionUser = Depends(current_user),
+) -> dict:
     if not consent:
         raise HTTPException(403, 'Explicit consent is required before processing')
     if view not in VALID_VIEWS:
@@ -87,6 +125,17 @@ async def capture(view: str = Form(...), consent: bool = Form(False), file: Uplo
     if image is None or min(image.shape[:2]) < MIN_DIMENSION:
         raise HTTPException(400, 'Select a decodable image at least 64 pixels in each dimension')
     record = capture_decision(view, image, data)
+    record["measurementVision"] = analyze_measurement_capture(data)
+    try:
+        capture_session_id = ensure_session(user, session_id, height_mm)
+    except PermissionError as error:
+        raise HTTPException(404, str(error)) from error
+    persisted = persist_analysis(
+        user=user, session_id=capture_session_id, view=view, data=data,
+        content_type=file.content_type or "application/octet-stream", record=record,
+        width=image.shape[1], height=image.shape[0],
+    )
+    record.update(persisted)
     log.append(record)
     return record
 
@@ -132,7 +181,10 @@ def turn_coverage(reader, count: float, duration: float) -> dict:
 
 
 @app.post('/api/turn-video')
-async def turn_video(consent: bool = Form(False), file: UploadFile = File(...)) -> dict:
+async def turn_video(
+    consent: bool = Form(False), session_id: str | None = Form(None),
+    file: UploadFile = File(...), user: SessionUser = Depends(current_user),
+) -> dict:
     """Bounded local video inspection; temporary source is always deleted."""
     import hashlib
     import os
@@ -189,6 +241,15 @@ async def turn_video(consent: bool = Form(False), file: UploadFile = File(...)) 
                       scope='Sampled exposure/blur and pose-orientation turn coverage across the clip. '
                             'Posture quality and single-continuous-turn confirmation still require review.',
                       provisionalThresholds=True)
+        try:
+            capture_session_id = ensure_session(user, session_id)
+        except PermissionError as error:
+            raise HTTPException(404, str(error)) from error
+        record.update(persist_analysis(
+            user=user, session_id=capture_session_id, view="turn", data=data,
+            content_type=file.content_type or "application/octet-stream", record=record,
+            duration_seconds=duration,
+        ))
         log.append(record)
         return record
     finally:

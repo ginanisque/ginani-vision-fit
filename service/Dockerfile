@@ -17,7 +17,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 # Match the locally verified MediaPipe setup without allowing it to replace the
 # project's pinned OpenCV 5 package with an OpenCV 4 wheel.
 RUN python -m pip install --no-cache-dir --no-deps mediapipe==1.1.0 \
-    && python -m pip install --no-cache-dir absl-py flatbuffers sounddevice matplotlib protobuf
+    && python -m pip install --no-cache-dir absl-py certifi flatbuffers sounddevice matplotlib protobuf
 
 COPY app ./app
 COPY models ./models

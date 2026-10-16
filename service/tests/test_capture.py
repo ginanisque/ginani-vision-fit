@@ -1,9 +1,25 @@
 import cv2
 import numpy as np
 import pytest
+from uuid import uuid4
 from fastapi.testclient import TestClient
 from app.capture import capture_decision
+from app.auth import SessionUser, current_user
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def authenticated_capture(monkeypatch):
+    import app.main as main_module
+    user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
+    app.dependency_overrides[current_user] = lambda: user
+    session_id = str(uuid4())
+    monkeypatch.setattr(main_module, "ensure_session", lambda *_args, **_kwargs: session_id)
+    monkeypatch.setattr(main_module, "persist_analysis", lambda **_kwargs: {
+        "captureSessionId": session_id, "assetId": str(uuid4()), "analysisRunId": str(uuid4())
+    })
+    yield
+    app.dependency_overrides.clear()
 
 
 def subject(cord=True, clipped=False, duplicate=False):
@@ -68,7 +84,7 @@ def test_capture_is_recorded():
         r = c.post('/api/capture',data={'view':'front','consent':'true'},files={'file':('photo.png',encoded(subject()))})
         assert r.status_code == 200
         assert r.json()['decision'] == 'review'
-        assert c.get('/api/decisions').json()['records'][-1]['id'] == r.json()['id']
+        assert r.json()['analysisRunId']
 
 
 def test_bad_video():

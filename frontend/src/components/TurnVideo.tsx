@@ -5,7 +5,7 @@ import type { VideoDecision } from '../types'
 /** Backend limit for turn videos (service/app/main.py). */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-export function TurnVideo({ consent }: { consent: boolean }) {
+export function TurnVideo({ consent, sessionId }: { consent: boolean; sessionId?: string }) {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState<string | null>(null)
   const [result, setResult] = useState<VideoDecision | null>(null)
@@ -65,7 +65,7 @@ export function TurnVideo({ consent }: { consent: boolean }) {
     }
     setBusy(true); setError(''); setResult(null)
     try {
-      setResult(await submitTurnVideoCheck(file, consent))
+      setResult(await submitTurnVideoCheck(file, consent, sessionId))
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }

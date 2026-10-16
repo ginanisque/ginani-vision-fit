@@ -1,0 +1,220 @@
+"""Persist private capture assets and their analysis metadata."""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from uuid import UUID, uuid4
+
+from psycopg.types.json import Jsonb
+
+from .auth import SessionUser
+from .database import connection
+from .settings import get_settings
+from .storage import delete_private, put_private, signed_download_url
+
+
+def ensure_session(user: SessionUser, session_id: str | None, height_mm: float | None = None) -> UUID:
+    with connection() as conn:
+        if session_id:
+            row = conn.execute(
+                "select id from capture_sessions where id = %s and customer_id = %s",
+                (session_id, user.id),
+            ).fetchone()
+            if row is None:
+                raise PermissionError("Capture session not found for this customer")
+            if height_mm is not None:
+                conn.execute("update capture_sessions set height_mm = %s where id = %s", (height_mm, row["id"]))
+            return row["id"]
+        row = conn.execute(
+            """insert into capture_sessions
+                    (customer_id, created_by, height_mm, consented_at, consent_version, status)
+                 values (%s, %s, %s, now(), 'visionfit-v1', 'processing') returning id""",
+            (user.id, user.id, height_mm),
+        ).fetchone()
+        return row["id"]
+
+
+def persist_analysis(
+    *, user: SessionUser, session_id: UUID, view: str, data: bytes, content_type: str,
+    record: dict, width: int | None = None, height: int | None = None,
+    duration_seconds: float | None = None,
+) -> dict:
+    suffix = Path(content_type.split(";", 1)[0]).suffix or {
+        "image/jpeg": ".jpg", "image/png": ".png", "video/mp4": ".mp4", "video/webm": ".webm"
+    }.get(content_type, ".bin")
+    key = f"captures/{user.id}/{session_id}/{view}/{uuid4()}{suffix}"
+    put_private(key, data, content_type)
+    try:
+        with connection() as conn:
+            asset = conn.execute(
+                """insert into capture_assets
+                        (session_id, view, storage_provider, storage_key, content_type, byte_size,
+                         sha256, width_px, height_px, duration_seconds, captured_at)
+                     values (%s, %s, 'neon_object_storage', %s, %s, %s, %s, %s, %s, %s, now())
+                     returning id""",
+                (session_id, view, key, content_type, len(data), hashlib.sha256(data).hexdigest(),
+                 width, height, duration_seconds),
+            ).fetchone()
+            run = conn.execute(
+                """insert into analysis_runs
+                        (session_id, model_name, model_version, status, quality_decision,
+                         calibration, started_at, completed_at)
+                     values (%s, 'visionfit-opencv-mediapipe', 'vf2-posture-1', 'complete',
+                             %s, '{}'::jsonb, now(), now()) returning id""",
+                (session_id, Jsonb(record)),
+            ).fetchone()
+            for item in record.get("evidence", []):
+                if item.get("kind") != "pose-landmark" or not width or not height:
+                    continue
+                box = item["box"]
+                label = item.get("label", "").removeprefix("pose landmark: ")
+                conn.execute(
+                    """insert into detected_landmarks
+                            (analysis_run_id, asset_id, landmark_key, x_normalized, y_normalized,
+                             visibility, source)
+                         values (%s, %s, %s, %s, %s, 1, 'mediapipe_pose')
+                         on conflict (analysis_run_id, asset_id, landmark_key) do nothing""",
+                    (run["id"], asset["id"], label, box["x"] / width, box["y"] / height),
+                )
+            conn.execute("update capture_sessions set status = 'complete' where id = %s", (session_id,))
+        return {
+            "captureSessionId": str(session_id), "assetId": str(asset["id"]),
+            "analysisRunId": str(run["id"]),
+        }
+    except Exception:
+        delete_private(key)
+        raise
+
+
+def recent_decisions(limit: int) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """select ar.id, ar.session_id, ar.status::text, ar.model_name, ar.model_version,
+                      ar.quality_decision, ar.created_at, u.email customer_email
+                 from analysis_runs ar
+                 join capture_sessions cs on cs.id = ar.session_id
+                 join app_users u on u.id = cs.customer_id
+                order by ar.created_at desc limit %s""",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+    return [
+        {"id": str(row["id"]), "sessionId": str(row["session_id"]),
+         "customerEmail": row["customer_email"], "status": row["status"],
+         "modelName": row["model_name"], "modelVersion": row["model_version"],
+         "qualityDecision": row["quality_decision"], "createdAt": row["created_at"].isoformat()}
+        for row in rows
+    ]
+
+
+def admin_capture_sessions(limit: int = 100) -> list[dict]:
+    """List capture sessions for review without exposing private storage keys."""
+    with connection() as conn:
+        rows = conn.execute(
+            """select cs.id, cs.customer_id, u.email, u.display_name, u.role::text,
+                      cs.height_mm, cs.status::text, cs.consented_at, cs.created_at,
+                      cs.updated_at, count(distinct ca.id) asset_count,
+                      count(distinct ar.id) analysis_count,
+                      array_remove(array_agg(distinct ca.view::text), null) views,
+                      max(ar.created_at) latest_analysis_at
+                 from capture_sessions cs
+                 join app_users u on u.id = cs.customer_id
+                 left join capture_assets ca on ca.session_id = cs.id
+                 left join analysis_runs ar on ar.session_id = cs.id
+                group by cs.id, u.id
+                order by cs.created_at desc limit %s""",
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+    return [
+        {
+            "id": str(row["id"]), "customerId": str(row["customer_id"]),
+            "customerEmail": row["email"], "customerName": row["display_name"],
+            "customerRole": row["role"],
+            "heightMm": None if row["height_mm"] is None else float(row["height_mm"]),
+            "status": row["status"], "views": row["views"],
+            "assetCount": row["asset_count"], "analysisCount": row["analysis_count"],
+            "consentedAt": row["consented_at"].isoformat() if row["consented_at"] else None,
+            "createdAt": row["created_at"].isoformat(),
+            "updatedAt": row["updated_at"].isoformat(),
+            "latestAnalysisAt": row["latest_analysis_at"].isoformat() if row["latest_analysis_at"] else None,
+        }
+        for row in rows
+    ]
+
+
+def admin_capture_session(session_id: str) -> dict | None:
+    """Return review evidence and short-lived private asset links for one session."""
+    with connection() as conn:
+        session = conn.execute(
+            """select cs.id, cs.customer_id, u.email, u.display_name, u.role::text,
+                      cs.height_mm, cs.status::text, cs.consented_at, cs.consent_version,
+                      cs.notes, cs.created_at, cs.updated_at
+                 from capture_sessions cs join app_users u on u.id = cs.customer_id
+                where cs.id = %s""",
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            return None
+        assets = conn.execute(
+            """select id, view::text, storage_key, content_type, byte_size, sha256,
+                      width_px, height_px, duration_seconds, captured_at, created_at
+                 from capture_assets where session_id = %s order by created_at""",
+            (session_id,),
+        ).fetchall()
+        runs = conn.execute(
+            """select id, model_name, model_version, status::text, quality_decision,
+                      calibration, error_message, started_at, completed_at, created_at
+                 from analysis_runs where session_id = %s order by created_at desc""",
+            (session_id,),
+        ).fetchall()
+        landmarks = conn.execute(
+            """select dl.id, dl.analysis_run_id, dl.asset_id, dl.landmark_key,
+                      dl.x_normalized, dl.y_normalized, dl.z_relative, dl.visibility,
+                      dl.source, dl.manually_adjusted
+                 from detected_landmarks dl join analysis_runs ar on ar.id = dl.analysis_run_id
+                where ar.session_id = %s order by dl.landmark_key""",
+            (session_id,),
+        ).fetchall()
+    return {
+        "id": str(session["id"]), "customerId": str(session["customer_id"]),
+        "customerEmail": session["email"], "customerName": session["display_name"],
+        "customerRole": session["role"],
+        "heightMm": None if session["height_mm"] is None else float(session["height_mm"]),
+        "status": session["status"], "consentedAt": session["consented_at"].isoformat() if session["consented_at"] else None,
+        "consentVersion": session["consent_version"], "notes": session["notes"],
+        "createdAt": session["created_at"].isoformat(), "updatedAt": session["updated_at"].isoformat(),
+        "assets": [
+            {
+                "id": str(row["id"]), "view": row["view"], "contentType": row["content_type"],
+                "byteSize": row["byte_size"], "sha256": row["sha256"],
+                "widthPx": row["width_px"], "heightPx": row["height_px"],
+                "durationSeconds": float(row["duration_seconds"]) if row["duration_seconds"] is not None else None,
+                "capturedAt": row["captured_at"].isoformat() if row["captured_at"] else None,
+                "createdAt": row["created_at"].isoformat(),
+                "reviewUrl": signed_download_url(row["storage_key"]),
+            }
+            for row in assets
+        ],
+        "analysisRuns": [
+            {
+                "id": str(row["id"]), "modelName": row["model_name"],
+                "modelVersion": row["model_version"], "status": row["status"],
+                "qualityDecision": row["quality_decision"], "calibration": row["calibration"],
+                "errorMessage": row["error_message"],
+                "startedAt": row["started_at"].isoformat() if row["started_at"] else None,
+                "completedAt": row["completed_at"].isoformat() if row["completed_at"] else None,
+                "createdAt": row["created_at"].isoformat(),
+            }
+            for row in runs
+        ],
+        "landmarks": [
+            {
+                "id": row["id"], "analysisRunId": str(row["analysis_run_id"]),
+                "assetId": str(row["asset_id"]), "key": row["landmark_key"],
+                "x": float(row["x_normalized"]), "y": float(row["y_normalized"]),
+                "z": float(row["z_relative"]) if row["z_relative"] is not None else None,
+                "visibility": float(row["visibility"]) if row["visibility"] is not None else None,
+                "source": row["source"], "manuallyAdjusted": row["manually_adjusted"],
+            }
+            for row in landmarks
+        ],
+    }

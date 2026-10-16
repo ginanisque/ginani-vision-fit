@@ -59,12 +59,16 @@ Endpoints:
 - `GET  /api/health` — service + OpenCV version.
 - `POST /api/quality` — multipart form: `view` (`front`|`side`) + `file` (image).
   Returns a decision record (VF-0, exposure + blur only).
-- `POST /api/capture` — multipart form: `view` + `consent` + `file`. Consent-gated
+- `POST /api/capture` — authenticated multipart form: `view` + `consent` + `file`. Consent-gated
   exposure/blur, contrast-silhouette framing, cord candidate and pose-landmark
   posture evidence (VF-2).
-- `POST /api/turn-video` — multipart form: `consent` + `file` (video). Duration,
+- `POST /api/turn-video` — authenticated multipart form: `consent` + `file` (video). Duration,
   sampled exposure/blur and pose-orientation turn coverage (VF-2).
-- `GET  /api/decisions` — in-memory decision log.
+- `GET  /api/decisions` — Neon-backed capture analyses (admin only).
+- `GET  /api/measurements/definitions` — versioned backend measurement registry.
+- `POST /api/measurement-tables` — create a pending measurement table for a subject.
+- `GET  /api/measurement-tables/{id}` — retrieve a table in `mm`, `cm` or `in`.
+- `PUT  /api/measurement-tables/{id}/measurements/{key}` — record an estimated or reviewed value.
 
 ## Test
 
@@ -81,10 +85,17 @@ cd visionfit/service
   human review.
 - Posture and turn coverage need MediaPipe (see above); without it they return
   `unknown` and request review.
-- The decision log is in-memory for this milestone; durable storage is deferred.
+- Capture metadata, analyses, landmarks, and measurement tables are stored in Neon Postgres.
+  Capture binaries are private Neon Object Storage objects; Postgres stores object keys and metadata.
+- Values are stored canonically in millimetres; estimated values require confidence and admin review.
 
 ## AWS container
 
 `Dockerfile` packages the pinned OpenCV 5 service, the optional MediaPipe Pose runtime and the
 included task model. For a one-task ECS Express Mode deployment, frontend URL configuration,
 health checks and first-test steps, see [`../deploy/AWS_DEPLOYMENT.md`](../deploy/AWS_DEPLOYMENT.md).
+
+## Neon persistence
+
+The Postgres migrations are in [`migrations`](migrations/).
+See [`migrations/README.md`](migrations/README.md) for connection and setup instructions.

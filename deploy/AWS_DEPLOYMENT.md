@@ -1,10 +1,9 @@
 # Deploy VisionFit's OpenCV API to AWS
 
 This deploys the **processing API** as a container on Amazon ECS Express Mode. The frontend can
-remain hosted separately and call this API. The service runs OpenCV 5, MediaPipe Pose and the
-included pose model. It does not use a database: the decision log is in memory and resets when a
-container restarts. Uploaded images are analyzed in memory; turn videos use a temporary file that
-the API deletes after analysis.
+remain hosted separately and call this API. The service runs OpenCV 5 and MediaPipe Pose, verifies
+Neon Auth JWTs, writes application data to Neon Postgres, and stores captures privately in Neon
+Object Storage. ECS receives credentials from AWS Secrets Manager rather than from the image.
 
 ## Why ECS Express Mode
 
@@ -21,6 +20,9 @@ at one task. Review the AWS estimate and grant terms before running it.
 - The IAM roles required by ECS Express Mode: `ecsTaskExecutionRole` and
   `ecsInfrastructureRoleForExpressServices`. Use the AWS console's ECS Express Mode setup guidance
   to create them if they are not already present.
+- A Secrets Manager JSON secret whose execution role can read, containing these keys:
+  `DATABASE_URL_POOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`,
+  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_BUCKET`.
 - A bash-compatible terminal (WSL or Git Bash on Windows).
 
 ## Deploy the API
@@ -33,13 +35,16 @@ value. Then run the script:
 export AWS_REGION=us-east-1
 export ECS_EXECUTION_ROLE_ARN='arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole'
 export ECS_INFRASTRUCTURE_ROLE_ARN='arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsInfrastructureRoleForExpressServices'
+export VISIONFIT_RUNTIME_SECRET_ARN='arn:aws:secretsmanager:REGION:ACCOUNT:secret:visionfit/runtime-RANDOM'
+export VISIONFIT_BOOTSTRAP_ADMIN_EMAILS='your-admin@example.com'
 export VISIONFIT_CORS_ORIGINS='http://localhost:5173'
 bash visionfit/deploy/aws-ecs-express.sh
 ```
 
 The script creates an ECR repository if needed, builds and pushes the service image, and asks ECS
-Express Mode to create a one-task service with 1 vCPU, 2 GiB of memory and `/api/health` checks. It
-prints no credentials.
+Express Mode to create a one-task service with 1 vCPU, 2 GiB of memory and `/api/health` checks.
+It references individual JSON keys from Secrets Manager and prints no credentials. The execution
+role must allow `secretsmanager:GetSecretValue` for this secret.
 Creating the load balancer and Fargate task can incur charges even during testing. Delete the ECS
 Express Mode service and its associated resources when the test is over if you do not want it to
 continue running.

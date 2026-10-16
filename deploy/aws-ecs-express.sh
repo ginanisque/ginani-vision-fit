@@ -9,6 +9,8 @@ REPOSITORY="${ECR_REPOSITORY:-ginani-visionfit-api}"
 EXECUTION_ROLE="${ECS_EXECUTION_ROLE_ARN:-}"
 INFRASTRUCTURE_ROLE="${ECS_INFRASTRUCTURE_ROLE_ARN:-}"
 CORS_ORIGINS="${VISIONFIT_CORS_ORIGINS:-http://localhost:5173}"
+RUNTIME_SECRET_ARN="${VISIONFIT_RUNTIME_SECRET_ARN:-}"
+BOOTSTRAP_ADMINS="${VISIONFIT_BOOTSTRAP_ADMIN_EMAILS:-}"
 
 for tool in aws docker python3; do
   command -v "$tool" >/dev/null || { echo "Required command not found: $tool" >&2; exit 1; }
@@ -16,6 +18,7 @@ done
 [[ -n "$REGION" ]] || { echo "Set AWS_REGION to the AWS region for your grant." >&2; exit 1; }
 [[ -n "$EXECUTION_ROLE" ]] || { echo "Set ECS_EXECUTION_ROLE_ARN to the ecsTaskExecutionRole ARN." >&2; exit 1; }
 [[ -n "$INFRASTRUCTURE_ROLE" ]] || { echo "Set ECS_INFRASTRUCTURE_ROLE_ARN to the ecsInfrastructureRoleForExpressServices ARN." >&2; exit 1; }
+[[ -n "$RUNTIME_SECRET_ARN" ]] || { echo "Set VISIONFIT_RUNTIME_SECRET_ARN to the Secrets Manager ARN containing the VisionFit runtime JSON." >&2; exit 1; }
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
@@ -32,8 +35,20 @@ aws ecr get-login-password --region "$REGION" \
 docker build --platform linux/amd64 -t "$IMAGE" "$SERVICE_DIR"
 docker push "$IMAGE"
 
-export IMAGE CORS_ORIGINS
-CONTAINER_JSON="$(python3 -c 'import json,os; print(json.dumps({"image":os.environ["IMAGE"],"containerPort":8080,"environment":[{"name":"VISIONFIT_CORS_ORIGINS","value":os.environ["CORS_ORIGINS"]}]}))')"
+export IMAGE CORS_ORIGINS RUNTIME_SECRET_ARN BOOTSTRAP_ADMINS
+CONTAINER_JSON="$(python3 -c '
+import json, os
+secret = os.environ["RUNTIME_SECRET_ARN"]
+names = ["DATABASE_URL_POOLED", "NEON_AUTH_BASE_URL", "NEON_AUTH_JWKS_URL", "AWS_ENDPOINT_URL_S3", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "S3_REGION", "S3_BUCKET"]
+print(json.dumps({
+    "image": os.environ["IMAGE"],
+    "containerPort": 8080,
+    "environment": [
+        {"name": "VISIONFIT_CORS_ORIGINS", "value": os.environ["CORS_ORIGINS"]},
+        {"name": "VISIONFIT_BOOTSTRAP_ADMIN_EMAILS", "value": os.environ["BOOTSTRAP_ADMINS"]},
+    ],
+    "secrets": [{"name": name, "valueFrom": f"{secret}:{name}::"} for name in names],
+}))')"
 
 aws ecs create-express-gateway-service \
   --service-name "$SERVICE_NAME" \

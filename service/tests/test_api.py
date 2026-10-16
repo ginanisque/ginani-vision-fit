@@ -26,7 +26,8 @@ def _png_bytes(image: np.ndarray) -> bytes:
     return buf.tobytes()
 
 
-def test_health_reports_opencv_5() -> None:
+def test_health_reports_opencv_5(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.database_health", lambda: True)
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -101,12 +102,5 @@ def test_undecodable_file_rejected() -> None:
     assert response.status_code == 400
 
 
-def test_decisions_are_recorded() -> None:
-    before = len(client.get("/api/decisions").json()["records"])
-    client.post(
-        "/api/quality",
-        data={"view": "front"},
-        files={"file": ("front.png", _png_bytes(_structured_image()), "image/png")},
-    )
-    after = len(client.get("/api/decisions").json()["records"])
-    assert after == before + 1
+def test_persisted_decisions_require_admin() -> None:
+    assert client.get("/api/decisions").status_code == 401
