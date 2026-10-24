@@ -1,0 +1,361 @@
+"""VF-3 multi-view tailoring measurement estimation.
+
+The estimator deliberately returns review-only candidates.  MediaPipe supplies
+anatomical levels, OpenCV supplies a foreground silhouette, known height supplies
+scale, and an ellipse approximates each body cross-section.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from .posture import Landmark, POSTURE_THRESHOLDS, estimate_pose, load_pose, view_orientation
+
+
+LEVELS = {
+    "bust": 0.32,   # shoulder-to-hip fraction
+    "underbust": 0.48,
+    "waist": 0.70,
+    "hip": 1.00,
+}
+ACROSS_CHEST_FRACTION = 0.25
+MODEL_VERSION = "vf3-geometry-1"
+CORE_KEYS = (
+    "bust", "underbust", "bust_point", "bust_span", "bust_radius", "waist",
+    "front_shoulder", "back_shoulder", "across_chest", "across_back",
+    "nape_to_waist", "full_front_length",
+)
+
+
+def _load_calibration_profile() -> dict:
+    """Load trainable per-measurement corrections without changing geometry code.
+
+    A trained profile is a small versioned JSON artifact containing ``factor``,
+    ``biasMm`` and ``maeMm`` maps. Missing values deliberately keep the raw
+    geometry and a conservative uncertainty rather than inventing accuracy.
+    """
+    path = os.getenv("VISIONFIT_MEASUREMENT_MODEL_PATH", "").strip()
+    if not path:
+        return {"version": MODEL_VERSION, "factor": {}, "biasMm": {}, "maeMm": {}}
+    try:
+        profile = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Measurement calibration profile cannot be loaded: {error}") from error
+    if not isinstance(profile, dict) or not isinstance(profile.get("version"), str):
+        raise ValueError("Measurement calibration profile requires a string version")
+    for name in ("factor", "biasMm", "maeMm"):
+        if not isinstance(profile.get(name, {}), dict):
+            raise ValueError(f"Measurement calibration profile {name} must be an object")
+    return profile
+
+
+def _apply_profile(key: str, raw_mm: float, profile: dict, default_mae_mm: float) -> tuple[float, float]:
+    factor = float(profile.get("factor", {}).get(key, 1.0))
+    bias = float(profile.get("biasMm", {}).get(key, 0.0))
+    mae = float(profile.get("maeMm", {}).get(key, default_mae_mm))
+    value = raw_mm * factor + bias
+    if not math.isfinite(value) or value <= 0 or not math.isfinite(mae) or mae <= 0:
+        raise ValueError(f"Invalid calibration values for {key}")
+    return value, mae
+
+
+def ellipse_perimeter(width_mm: float, depth_mm: float) -> float:
+    """Ramanujan's second approximation for an elliptical cross-section."""
+    a, b = width_mm / 2.0, depth_mm / 2.0
+    h = ((a - b) ** 2) / ((a + b) ** 2)
+    return math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
+
+
+def _pose_bounds(landmarks: dict[str, Landmark], width: int, height: int) -> tuple[int, int, int, int]:
+    visible = [lm for lm in landmarks.values() if lm.visibility >= POSTURE_THRESHOLDS["minVisibility"]]
+    if len(visible) < 8:
+        raise ValueError("Too few visible pose landmarks for silhouette extraction")
+    xs = [lm.x * width for lm in visible]
+    ys = [lm.y * height for lm in visible]
+    margin_x = max(8, int((max(xs) - min(xs)) * 0.22))
+    margin_y = max(8, int((max(ys) - min(ys)) * 0.10))
+    x0 = max(1, int(min(xs)) - margin_x)
+    y0 = max(1, int(min(ys)) - margin_y)
+    x1 = min(width - 1, int(max(xs)) + margin_x)
+    y1 = min(height - 1, int(max(ys)) + margin_y)
+    if x1 - x0 < 10 or y1 - y0 < 20:
+        raise ValueError("Detected pose is too small for measurement")
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def _silhouette(image: np.ndarray, landmarks: dict[str, Landmark]) -> np.ndarray:
+    height, width = image.shape[:2]
+    rect = _pose_bounds(landmarks, width, height)
+    labels = np.zeros((height, width), np.uint8)
+    background = np.zeros((1, 65), np.float64)
+    foreground = np.zeros((1, 65), np.float64)
+    cv2.grabCut(image, labels, rect, background, foreground, 5, cv2.GC_INIT_WITH_RECT)
+    mask = np.where((labels == cv2.GC_FGD) | (labels == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    count, component_labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    if count <= 1:
+        raise ValueError("A body silhouette could not be separated from the background")
+    torso_x = int(((landmarks["left_hip"].x + landmarks["right_hip"].x) / 2) * width)
+    torso_y = int(((landmarks["left_shoulder"].y + landmarks["right_hip"].y) / 2) * height)
+    component = component_labels[min(max(torso_y, 0), height - 1), min(max(torso_x, 0), width - 1)]
+    if component == 0:
+        component = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    return np.where(component_labels == component, 255, 0).astype(np.uint8)
+
+
+def _width_at(mask: np.ndarray, y: int, center_x: int) -> float:
+    band = max(2, round(mask.shape[0] * 0.008))
+    widths: list[int] = []
+    for row in mask[max(0, y - band):min(mask.shape[0], y + band + 1)]:
+        padded = np.pad(row > 0, (1, 1))
+        transitions = np.diff(padded.astype(np.int8))
+        starts = np.flatnonzero(transitions == 1)
+        ends = np.flatnonzero(transitions == -1) - 1
+        if len(starts):
+            segments = list(zip(starts, ends))
+            start, end = min(
+                segments,
+                key=lambda segment: 0 if segment[0] <= center_x <= segment[1]
+                else min(abs(center_x - segment[0]), abs(center_x - segment[1])),
+            )
+            widths.append(int(end - start + 1))
+    if not widths:
+        raise ValueError("Silhouette is missing at a required body level")
+    return float(np.median(widths))
+
+
+def _image_evidence(image: np.ndarray, landmarks: dict[str, Landmark]) -> tuple[dict[str, float], dict[str, int], float, float]:
+    required = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in required):
+        raise ValueError("Shoulders and hips must be visible in both images")
+    mask = _silhouette(image, landmarks)
+    rows = np.flatnonzero(np.any(mask > 0, axis=1))
+    if len(rows) < image.shape[0] * 0.35:
+        raise ValueError("The extracted silhouette is too short for height calibration")
+    subject_height_px = float(rows[-1] - rows[0] + 1)
+    shoulder_y = ((landmarks["left_shoulder"].y + landmarks["right_shoulder"].y) / 2) * image.shape[0]
+    hip_y = ((landmarks["left_hip"].y + landmarks["right_hip"].y) / 2) * image.shape[0]
+    level_fractions = {**LEVELS, "across_chest": ACROSS_CHEST_FRACTION}
+    levels = {name: round(shoulder_y + fraction * (hip_y - shoulder_y)) for name, fraction in level_fractions.items()}
+    shoulder_x = ((landmarks["left_shoulder"].x + landmarks["right_shoulder"].x) / 2) * image.shape[1]
+    hip_x = ((landmarks["left_hip"].x + landmarks["right_hip"].x) / 2) * image.shape[1]
+    centers = {name: round(shoulder_x + fraction * (hip_x - shoulder_x)) for name, fraction in level_fractions.items()}
+    widths = {name: _width_at(mask, y, centers[name]) for name, y in levels.items()}
+    orientation = view_orientation(landmarks)
+    if orientation == "side":
+        # An arm may touch the torso in profile and turn both into one connected
+        # silhouette. Human torso depth cannot occupy most of the person's
+        # calibrated height, so cap the search result to a conservative body-depth
+        # window. Training corrections can refine this bound later.
+        depth_fraction = {"bust": 0.23, "underbust": 0.21, "waist": 0.20,
+                          "hip": 0.25, "across_chest": 0.21}
+        widths = {name: min(value, subject_height_px * depth_fraction[name])
+                  for name, value in widths.items()}
+    else:
+        shoulder_span = abs(landmarks["left_shoulder"].x - landmarks["right_shoulder"].x) * image.shape[1]
+        hip_span = abs(landmarks["left_hip"].x - landmarks["right_hip"].x) * image.shape[1]
+        for name, fraction in level_fractions.items():
+            anatomical_span = shoulder_span + fraction * (hip_span - shoulder_span)
+            # Pose points sit slightly inside the clothing edge. Five percent
+            # preserves that edge while preventing connected arms/background
+            # from becoming torso width.
+            widths[name] = min(widths[name], max(1.0, anatomical_span * 1.05))
+    visibility = min(landmarks[name].visibility for name in required)
+    return widths, levels, visibility, subject_height_px
+
+
+def estimate_circumferences(
+    front: np.ndarray, side: np.ndarray, height_mm: float, back: np.ndarray | None = None,
+) -> dict:
+    if not 1000 <= height_mm <= 2500:
+        raise ValueError("Height must be between 1000 and 2500 mm")
+    pose = load_pose()
+    if pose is None:
+        raise ValueError("MediaPipe Pose Landmarker is unavailable")
+    front_pose = estimate_pose(front, pose)
+    side_pose = estimate_pose(side, pose)
+    back_pose = estimate_pose(back, pose) if back is not None else None
+    if front_pose is None or side_pose is None or (back is not None and back_pose is None):
+        raise ValueError("A full-body pose was not detected in every supplied image")
+    observed = {"front": view_orientation(front_pose), "side": view_orientation(side_pose)}
+    if back_pose is not None:
+        observed["back"] = view_orientation(back_pose)
+    mismatched = [name for name, orientation in observed.items()
+                  if orientation not in (name, "unknown")]
+    if mismatched:
+        details = ", ".join(f"{name} detected as {observed[name]}" for name in mismatched)
+        raise ValueError(f"Capture views are mismatched: {details}")
+
+    front_widths, front_levels, front_visibility, front_height = _image_evidence(front, front_pose)
+    side_widths, side_levels, side_visibility, side_height = _image_evidence(side, side_pose)
+    front_scale = height_mm / front_height
+    side_scale = height_mm / side_height
+
+    back_widths = back_levels = None
+    back_visibility = 0.0
+    back_scale = None
+    if back is not None and back_pose is not None:
+        back_widths, back_levels, back_visibility, back_height = _image_evidence(back, back_pose)
+        back_scale = height_mm / back_height
+
+    raw: dict[str, float] = {}
+    feature_rows: dict[str, dict[str, float]] = {}
+    for key in ("bust", "underbust", "waist"):
+        width_mm = front_widths[key] * front_scale
+        depth_mm = side_widths[key] * side_scale
+        raw[key] = ellipse_perimeter(width_mm, depth_mm)
+        feature_rows[key] = {"frontWidthMm": width_mm, "sideDepthMm": depth_mm}
+
+    shoulder_width_mm = abs(front_pose["left_shoulder"].x - front_pose["right_shoulder"].x) * front.shape[1] * front_scale
+    side_neck_x = (front_pose["left_shoulder"].x + front_pose["right_shoulder"].x) / 2
+    shoulder_y = (front_pose["left_shoulder"].y + front_pose["right_shoulder"].y) / 2 * front.shape[0]
+    hip_y = (front_pose["left_hip"].y + front_pose["right_hip"].y) / 2 * front.shape[0]
+    torso_mm = abs(hip_y - shoulder_y) * front_scale
+    bust_width_mm = front_widths["bust"] * front_scale
+    bust_depth_mm = side_widths["bust"] * side_scale
+    bust_projection_mm = max(0.0, (bust_depth_mm - side_widths["underbust"] * side_scale) / 2)
+    raw.update({
+        "front_shoulder": shoulder_width_mm,
+        "across_chest": front_widths["across_chest"] * front_scale,
+        "bust_span": bust_width_mm * 0.52,
+        "bust_radius": max(torso_mm * 0.22, height_mm * 0.052),
+        "bust_point": math.hypot(torso_mm * 0.35, bust_width_mm * 0.25) + bust_projection_mm * 0.35,
+        "full_front_length": torso_mm * 0.78 + bust_projection_mm * 0.75,
+    })
+    # Back-specific values use the back frame when supplied. A front-width
+    # fallback is retained for API compatibility but receives very low confidence.
+    back_across = (back_widths["across_chest"] * back_scale
+                   if back_widths is not None and back_scale is not None else raw["across_chest"])
+    back_shoulder = (abs(back_pose["left_shoulder"].x - back_pose["right_shoulder"].x)
+                     * back.shape[1] * back_scale if back is not None and back_pose is not None and back_scale else shoulder_width_mm)
+    back_torso = torso_mm
+    if back is not None and back_pose is not None and back_scale:
+        back_shoulder_y = (back_pose["left_shoulder"].y + back_pose["right_shoulder"].y) / 2 * back.shape[0]
+        back_hip_y = (back_pose["left_hip"].y + back_pose["right_hip"].y) / 2 * back.shape[0]
+        back_torso = abs(back_hip_y - back_shoulder_y) * back_scale
+    raw.update({
+        "back_shoulder": back_shoulder * 1.04,
+        "across_back": back_across,
+        "nape_to_waist": back_torso * 0.78,
+    })
+
+    profile = _load_calibration_profile()
+    names = {
+        "bust": "Bust", "underbust": "Underbust", "bust_point": "Bust point length",
+        "bust_span": "Bust span", "bust_radius": "Bust radius", "waist": "Waist",
+        "front_shoulder": "Front shoulder", "back_shoulder": "Back shoulder",
+        "across_chest": "Across chest", "across_back": "Across back",
+        "nape_to_waist": "Nape to waist", "full_front_length": "Full front length",
+    }
+    inferred = {"bust_point", "bust_span", "bust_radius", "back_shoulder", "nape_to_waist", "full_front_length"}
+    source_views = {
+        "bust": ["front", "side"], "underbust": ["front", "side"],
+        "bust_point": ["front", "side"], "bust_span": ["front"],
+        "bust_radius": ["front", "side"], "waist": ["front", "side", "back"],
+        "front_shoulder": ["front"], "back_shoulder": ["back"],
+        "across_chest": ["front"], "across_back": ["back"],
+        "nape_to_waist": ["back"], "full_front_length": ["front", "side"],
+    }
+    confidences = {
+        key: min(front_visibility, side_visibility) * (0.38 if key in inferred else 0.58)
+        for key in CORE_KEYS
+    }
+    if back is not None:
+        for key in ("back_shoulder", "across_back", "nape_to_waist"):
+            confidences[key] = min(back_visibility, 1.0) * (0.38 if key in inferred else 0.52)
+    default_mae = {key: (45.0 if key in ("bust", "underbust", "waist") else 30.0) for key in CORE_KEYS}
+    values = []
+    for key in CORE_KEYS:
+        value_mm, mae_mm = _apply_profile(key, raw[key], profile, default_mae[key])
+        values.append({
+            "key": key, "displayName": names[key], "value": round(value_mm / 10, 1), "unit": "cm",
+            "rawValueMm": round(raw[key], 1), "uncertaintyMm": round(mae_mm, 1),
+            "confidence": round(max(0.05, min(0.95, confidences[key])), 2),
+            "requiresReview": True,
+            "sourceViews": source_views[key],
+            "evidence": feature_rows.get(key, {}),
+            "provenance": "inferred anatomical level" if key in inferred else "measured multi-view geometry",
+        })
+    lowest = min(values, key=lambda item: item["confidence"])
+    return {
+        "status": "review_required",
+        "modelVersion": profile["version"],
+        "registryVersion": "1.4.0",
+        "method": "OpenCV silhouettes + MediaPipe pose levels + per-view height calibration + versioned correction profile",
+        "warning": "Estimates are body-measurement candidates, not approved cutting values. Inferred bust and surface paths need targeted tape or reviewer confirmation until validated.",
+        "orientations": {"front": view_orientation(front_pose), "side": view_orientation(side_pose),
+                         "back": view_orientation(back_pose) if back_pose else "not_supplied"},
+        "levels": {"front": front_levels, "side": side_levels, "back": back_levels or {}},
+        "trainingFeatures": {"heightMm": height_mm, "rawMeasurementsMm": {key: round(value, 2) for key, value in raw.items()}},
+        "recommendedAction": f"Confirm {lowest['displayName']} with a tape, then retain the correction as labelled training data.",
+        "targetedManualCheck": {"key": lowest["key"], "displayName": lowest["displayName"],
+                                "reason": "Lowest confidence in this profile"},
+        "measurements": values,
+    }
+
+
+def estimate_back_measurements(
+    image: np.ndarray, height_mm: float, landmarks: dict[str, Landmark] | None = None,
+) -> dict:
+    """Estimate straight across-back and nape-to-centre-back-waist distances."""
+    if not 1000 <= height_mm <= 2500:
+        raise ValueError("Height must be between 1000 and 2500 mm")
+    if landmarks is None:
+        landmarks = estimate_pose(image, load_pose())
+    if landmarks is None or view_orientation(landmarks) != "back":
+        raise ValueError("A back-facing full-body pose is required")
+    required = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in required):
+        raise ValueError("Shoulders and hips must be visible in the back-facing frame")
+
+    mask = _silhouette(image, landmarks)
+    rows = np.flatnonzero(np.any(mask > 0, axis=1))
+    if len(rows) < image.shape[0] * 0.35:
+        raise ValueError("The back silhouette is too short for height calibration")
+    scale = height_mm / float(rows[-1] - rows[0] + 1)
+    shoulder_y = ((landmarks["left_shoulder"].y + landmarks["right_shoulder"].y) / 2) * image.shape[0]
+    hip_y = ((landmarks["left_hip"].y + landmarks["right_hip"].y) / 2) * image.shape[0]
+    shoulder_x = ((landmarks["left_shoulder"].x + landmarks["right_shoulder"].x) / 2) * image.shape[1]
+    hip_x = ((landmarks["left_hip"].x + landmarks["right_hip"].x) / 2) * image.shape[1]
+    torso_height = hip_y - shoulder_y
+    across_y = round(shoulder_y + 0.30 * torso_height)
+    across_center_x = round(shoulder_x + 0.30 * (hip_x - shoulder_x))
+    across_back_mm = _width_at(mask, across_y, across_center_x) * scale
+
+    # MediaPipe has no nape or natural-waist point. These reproducible torso
+    # fractions are deliberately exposed as estimates rather than landmarks.
+    nape_y = shoulder_y - 0.08 * torso_height
+    cb_waist_y = shoulder_y + 0.70 * torso_height
+    nape_to_waist_mm = abs(cb_waist_y - nape_y) * scale
+    confidence = min(landmarks[name].visibility for name in required) * 0.45
+    return {
+        "status": "experimental",
+        "method": "back-frame OpenCV silhouette + MediaPipe torso levels + height calibration",
+        "warning": "Nape and centre-back waist are inferred levels, not native MediaPipe landmarks. Human confirmation is required.",
+        "frameLevels": {
+            "acrossBackY": across_y,
+            "napeY": round(nape_y),
+            "centreBackWaistY": round(cb_waist_y),
+        },
+        "measurements": [
+            {
+                "key": "across_back",
+                "displayName": "Across back (xback-right to xback-left)",
+                "value": float(round(across_back_mm / 10, 1)), "unit": "cm",
+                "confidence": round(confidence, 2), "requiresReview": True,
+            },
+            {
+                "key": "nape_to_cb_waist",
+                "displayName": "Nape to centre-back waist",
+                "value": float(round(nape_to_waist_mm / 10, 1)), "unit": "cm",
+                "confidence": round(confidence, 2), "requiresReview": True,
+            },
+        ],
+    }

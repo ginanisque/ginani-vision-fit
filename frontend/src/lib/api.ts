@@ -1,4 +1,4 @@
-import type { AnalysisDecisionDto, AuthSession, CaptureSessionDetailDto, CaptureSessionSummaryDto, CustomerDto, MeasurementDefinitionDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
+import type { AnalysisDecisionDto, AuthSession, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
 import { authClient, bearerToken } from './auth-client'
 
 export interface SubmitOptions {
@@ -54,7 +54,7 @@ async function authorization(): Promise<Record<string, string>> {
 }
 
 export async function submitCaptureCheck(
-  image: File, view: 'front' | 'side', consent: boolean,
+  image: File, view: 'front' | 'side' | 'back', consent: boolean,
   sessionId?: string, heightMm?: number,
 ): Promise<QualityDecision> {
   const form = new FormData()
@@ -74,12 +74,34 @@ export async function submitCaptureCheck(
   return await response.json()
 }
 
+export async function submitMeasurementEstimate(
+  front: File, side: File, back: File, heightMm: number, consent: boolean,
+): Promise<CircumferenceEstimate> {
+  const form = new FormData()
+  form.append('front', front)
+  form.append('side', side)
+  form.append('back', back)
+  form.append('height_mm', String(heightMm))
+  form.append('consent', String(consent))
+  let response: Response
+  try {
+    response = await fetch(apiUrl('/api/measurement-estimates'), {
+      method: 'POST', headers: await authorization(), body: form,
+    })
+  } catch {
+    throw networkError('/api/measurement-estimates')
+  }
+  if (!response.ok) throw new Error(`Measurement estimate failed (${response.status}): ${await response.text()}`)
+  return await response.json()
+}
+
 /** POST a slow-turn video to the service and return its review decision. */
-export async function submitTurnVideoCheck(file: File, consent: boolean, sessionId?: string): Promise<VideoDecision> {
+export async function submitTurnVideoCheck(file: File, consent: boolean, sessionId?: string, heightMm?: number): Promise<VideoDecision> {
   const form = new FormData()
   form.append('consent', String(consent))
   form.append('file', file)
   if (sessionId) form.append('session_id', sessionId)
+  if (heightMm) form.append('height_mm', String(heightMm))
 
   let response: Response
   try {

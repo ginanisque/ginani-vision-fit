@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { CAMERA_GUIDANCE, CLOTHING_GUIDANCE, CORD_GUIDANCE } from '../lib/guidance'
 
 interface Props {
-  view: 'front' | 'side'
+  view: 'front' | 'side' | 'back'
   preview: string | null
   onSelect: (file: File | null) => void
   onBack: () => void
@@ -11,7 +11,7 @@ interface Props {
 
 export function ImageSelectStep({ view, preview, onSelect, onBack, onContinue }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
-  const title = view === 'front' ? 'Front photo' : 'Side photo'
+  const title = `${view[0].toUpperCase()}${view.slice(1)} photo`
 
   return (
     <section className="step">

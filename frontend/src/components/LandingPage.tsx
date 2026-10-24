@@ -5,7 +5,7 @@ interface LandingPageProps {
 const faqs = [
   {
     question: 'What do I need for a VisionFit capture?',
-    answer: 'A phone or camera, a well-lit uncluttered space, fitted clothing, your height, and enough room to take clear front and side photos plus a slow-turn video.',
+    answer: 'A phone or camera, a well-lit uncluttered space, fitted clothing, your height, and enough room to take clear front, side, and back photos plus an optional slow-turn video.',
   },
   {
     question: 'What measurements can VisionFit support?',
@@ -55,7 +55,7 @@ export function LandingPage({ onStart }: LandingPageProps) {
           <p>VisionFit turns a careful capture into structured evidence for garment measurement. The service checks image quality and posture before results reach the review workspace.</p>
           <ol className="process-list">
             <li><span>01</span><div><strong>Prepare</strong><p>Read the privacy notice, give consent, and enter your height for scale.</p></div></li>
-            <li><span>02</span><div><strong>Capture</strong><p>Upload clear front and side photos, followed by a slow-turn video.</p></div></li>
+            <li><span>02</span><div><strong>Capture</strong><p>Upload clear front, side, and back photos, followed by an optional slow-turn video.</p></div></li>
             <li><span>03</span><div><strong>Check</strong><p>Automated checks flag blur, lighting, framing, orientation, and posture concerns.</p></div></li>
             <li><span>04</span><div><strong>Review</strong><p>An authorised specialist reviews landmarks and the resulting measurement table.</p></div></li>
           </ol>

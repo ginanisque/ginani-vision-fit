@@ -17,6 +17,7 @@ from .capture_store import (
 from .database import database_health
 from .measurements import router as measurements_router
 from .roboflow import analyze_measurement_capture, configuration_status as roboflow_status
+from .circumference import estimate_back_measurements, estimate_circumferences
 
 app = FastAPI(title="VisionFit quality service", version="0.1.0")
 app.include_router(auth_router)
@@ -54,7 +55,8 @@ app.add_middleware(
 
 log = DecisionLog()
 
-VALID_VIEWS = {"front", "side"}
+QUALITY_VIEWS = {"front", "side"}
+CAPTURE_VIEWS = {"front", "side", "back"}
 MIN_DIMENSION = 64
 
 
@@ -66,7 +68,7 @@ def health() -> dict:
 
 @app.post("/api/quality")
 async def quality(view: str = Form(...), file: UploadFile = File(...)) -> dict:
-    if view not in VALID_VIEWS:
+    if view not in QUALITY_VIEWS:
         raise HTTPException(status_code=400, detail="view must be 'front' or 'side'")
 
     data = await file.read()
@@ -108,6 +110,30 @@ from .capture import capture_decision
 MAX_CAPTURE_BYTES = 20 * 1024 * 1024
 
 
+@app.post('/api/measurement-estimates')
+async def measurement_estimates(
+    consent: bool = Form(False), height_mm: float = Form(...),
+    front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
+    _user: SessionUser = Depends(current_user),
+) -> dict:
+    """Return review-only paired-view circumference candidates without persisting another copy."""
+    if not consent:
+        raise HTTPException(403, 'Explicit consent is required before processing')
+    images = []
+    for upload in (front, side, back):
+        data = await upload.read(MAX_CAPTURE_BYTES + 1)
+        if len(data) > MAX_CAPTURE_BYTES:
+            raise HTTPException(413, 'Image exceeds 20 MiB')
+        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
+        if image is None or min(image.shape[:2]) < MIN_DIMENSION:
+            raise HTTPException(400, 'Select decodable front, side and back images at least 64 pixels in each dimension')
+        images.append(image)
+    try:
+        return estimate_circumferences(images[0], images[1], height_mm, images[2])
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
 @app.post('/api/capture')
 async def capture(
     view: str = Form(...), consent: bool = Form(False), session_id: str | None = Form(None),
@@ -116,8 +142,8 @@ async def capture(
 ) -> dict:
     if not consent:
         raise HTTPException(403, 'Explicit consent is required before processing')
-    if view not in VALID_VIEWS:
-        raise HTTPException(400, 'view must be front or side')
+    if view not in CAPTURE_VIEWS:
+        raise HTTPException(400, 'view must be front, side or back')
     data = await file.read(MAX_CAPTURE_BYTES + 1)
     if len(data) > MAX_CAPTURE_BYTES:
         raise HTTPException(413, 'Image exceeds 20 MiB')
@@ -145,12 +171,14 @@ async def capture(
 MAX_TURN_SECONDS = 90.0
 
 
-def turn_coverage(reader, count: float, duration: float) -> dict:
+def turn_coverage(reader, count: float, duration: float, height_mm: float | None = None) -> dict:
     """Sample frames across a turn clip and derive view-orientation coverage."""
     pose = load_pose()
     model_available = pose is not None
     seen: set[str] = set()
     orientations = []
+    back_measurements = None
+    best_back_visibility = -1.0
     for i in range(20):
         fraction = (i + 0.5) / 20.0
         reader.set(cv2.CAP_PROP_POS_FRAMES, int(count * fraction))
@@ -159,6 +187,18 @@ def turn_coverage(reader, count: float, duration: float) -> dict:
             continue
         landmarks = estimate_pose(frame, pose)
         orientation = view_orientation(landmarks) if landmarks else 'unknown'
+        if orientation == 'back' and landmarks and height_mm is not None:
+            visibility = min(
+                landmarks[name].visibility
+                for name in ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')
+            )
+            if visibility > best_back_visibility:
+                try:
+                    back_measurements = estimate_back_measurements(frame, height_mm, landmarks)
+                    back_measurements['timeSeconds'] = round(duration * fraction, 2)
+                    best_back_visibility = visibility
+                except ValueError:
+                    pass
         if orientation != 'unknown':
             seen.add(orientation)
         orientations.append(dict(timeSeconds=round(duration * fraction, 2), orientation=orientation))
@@ -177,12 +217,14 @@ def turn_coverage(reader, count: float, duration: float) -> dict:
         missingViews=missing,
         orientations=orientations,
         method='pose-landmark orientation' if model_available else 'pose model unavailable',
+        backMeasurements=back_measurements,
     )
 
 
 @app.post('/api/turn-video')
 async def turn_video(
     consent: bool = Form(False), session_id: str | None = Form(None),
+    height_mm: float | None = Form(None),
     file: UploadFile = File(...), user: SessionUser = Depends(current_user),
 ) -> dict:
     """Bounded local video inspection; temporary source is always deleted."""
@@ -220,7 +262,7 @@ async def turn_video(
             samples.append(dict(timeSeconds=round(duration*fraction, 2),
                                 quality='pass' if result.passed else 'fail', reasons=list(result.reasons)))
 
-        coverage = turn_coverage(reader, count, duration)
+        coverage = turn_coverage(reader, count, duration, height_mm)
 
         recapture = len(samples) != 5 or any(s['quality'] == 'fail' for s in samples)
         reasons = []

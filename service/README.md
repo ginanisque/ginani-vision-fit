@@ -64,6 +64,9 @@ Endpoints:
   posture evidence (VF-2).
 - `POST /api/turn-video` — authenticated multipart form: `consent` + `file` (video). Duration,
   sampled exposure/blur and pose-orientation turn coverage (VF-2).
+- `POST /api/measurement-estimates` — authenticated multipart form: `consent`, `height_mm`,
+  `front`, `side`, and `back`. Returns the 12 VF-3 body-measurement candidates, confidence,
+  uncertainty, raw training features, provenance, and a targeted review action.
 - `GET  /api/decisions` — Neon-backed capture analyses (admin only).
 - `GET  /api/measurements/definitions` — versioned backend measurement registry.
 - `POST /api/measurement-tables` — create a pending measurement table for a subject.
@@ -88,6 +91,20 @@ cd visionfit/service
 - Capture metadata, analyses, landmarks, and measurement tables are stored in Neon Postgres.
   Capture binaries are private Neon Object Storage objects; Postgres stores object keys and metadata.
 - Values are stored canonically in millimetres; estimated values require confidence and admin review.
+
+## VF-3 calibration training
+
+The geometry estimator is intentionally separate from learned correction. Save professionally
+measured labels in CSV columns named `raw_<measurement>_mm` and `tape_<measurement>_mm`, with one
+row per consenting subject. Fit an auditable baseline profile with:
+
+```bash
+PYTHONPATH=. ./.venv/bin/python scripts/train_measurement_calibration.py labels.csv models/vf3-calibration.json
+```
+
+Set `VISIONFIT_MEASUREMENT_MODEL_PATH=models/vf3-calibration.json` when running the API. The API
+returns the loaded model version and its observed MAE as uncertainty. Synthetic reference images
+must not be included as accuracy labels.
 
 ## AWS container
 

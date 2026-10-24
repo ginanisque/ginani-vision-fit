@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AuthSession, ConsentState, HeightUnit, QualityDecision, Step } from './types'
-import { loadAuthSession, logout, submitCaptureCheck } from './lib/api'
+import type { AuthSession, CircumferenceEstimate, ConsentState, HeightUnit, QualityDecision, Step } from './types'
+import { loadAuthSession, logout, submitCaptureCheck, submitMeasurementEstimate } from './lib/api'
 import { validateHeight } from './lib/flow'
 import { ConsentStep } from './components/ConsentStep'
 import { HeightStep } from './components/HeightStep'
@@ -26,11 +26,13 @@ export default function App() {
   const [height, setHeight] = useState<{ value: string; unit: HeightUnit }>({ value: '', unit: 'cm' })
   const [front, setFront] = useState<ImageSlot>({ file: null, preview: null })
   const [side, setSide] = useState<ImageSlot>({ file: null, preview: null })
+  const [back, setBack] = useState<ImageSlot>({ file: null, preview: null })
   const [lastRun, setLastRun] = useState<QualityDecision[]>([])
   const [log, setLog] = useState<QualityDecision[]>([])
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [captureSessionId, setCaptureSessionId] = useState<string | undefined>()
+  const [measurementEstimate, setMeasurementEstimate] = useState<CircumferenceEstimate | null>(null)
 
   useEffect(() => {
     loadAuthSession().then(authenticated).catch(() => {
@@ -40,25 +42,27 @@ export default function App() {
 
   const heightError = useMemo(() => validateHeight(height.value, height.unit), [height])
 
-  const handleImage = (view: 'front' | 'side', file: File | null) => {
-    const old = view === 'front' ? front : side
+  const handleImage = (view: 'front' | 'side' | 'back', file: File | null) => {
+    const old = view === 'front' ? front : view === 'side' ? side : back
     if (old.preview) URL.revokeObjectURL(old.preview)
     setLastRun([])
-    const setter = view === 'front' ? setFront : setSide
+    setMeasurementEstimate(null)
+    const setter = view === 'front' ? setFront : view === 'side' ? setSide : setBack
     setter(file ? { file, preview: URL.createObjectURL(file) } : { file: null, preview: null })
   }
 
   const runChecks = async () => {
-    if (!front.file || !side.file || !consent.agreed || !consent.acknowledged) return
+    if (!front.file || !side.file || !back.file || !consent.agreed || !consent.acknowledged) return
     setChecking(true)
     setError(null)
     const next: QualityDecision[] = []
     let activeSessionId = captureSessionId
     const numericHeight = Number(height.value) * (height.unit === 'in' ? 25.4 : 10)
     try {
-      const pairs: Array<[ImageSlot, 'front' | 'side']> = [
+      const pairs: Array<[ImageSlot, 'front' | 'side' | 'back']> = [
         [front, 'front'],
         [side, 'side'],
+        [back, 'back'],
       ]
       for (const [slot, view] of pairs) {
         if (slot.file) {
@@ -73,6 +77,15 @@ export default function App() {
       }
       setLastRun(next)
       setLog((prev) => [...prev, ...next])
+      if (next.length === 3 && next.every((result) => result.decision !== 'recapture')) {
+        try {
+          setMeasurementEstimate(await submitMeasurementEstimate(
+            front.file, side.file, back.file, numericHeight, consent.agreed && consent.acknowledged,
+          ))
+        } catch (estimateError) {
+          setError(estimateError instanceof Error ? estimateError.message : String(estimateError))
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -80,7 +93,7 @@ export default function App() {
     }
   }
 
-  const retake = (view: 'front' | 'side') => {
+  const retake = (view: 'front' | 'side' | 'back') => {
     setLastRun([])
     setError(null)
     setStep(view)
@@ -161,23 +174,37 @@ export default function App() {
             preview={side.preview}
             onSelect={(f) => handleImage('side', f)}
             onBack={() => setStep('front')}
+            onContinue={() => setStep('back')}
+          />
+        )}
+        {step === 'back' && (
+          <ImageSelectStep
+            view="back"
+            preview={back.preview}
+            onSelect={(f) => handleImage('back', f)}
+            onBack={() => setStep('side')}
             onContinue={() => setStep('review')}
           />
         )}
         {step === 'review' && (
           <QualityResult
-            previews={{ front: front.preview, side: side.preview }}
+            previews={{ front: front.preview, side: side.preview, back: back.preview }}
             results={lastRun}
             checking={checking}
             error={error}
+            measurementEstimate={measurementEstimate}
             onCheck={runChecks}
             onRetake={retake}
           />
         )}
       </main>
 
-      {step === 'review' && consent.agreed && consent.acknowledged && lastRun.length === 2 && (
-        <TurnVideo consent={true} sessionId={captureSessionId} />
+      {step === 'review' && consent.agreed && consent.acknowledged && lastRun.length === 3 && (
+        <TurnVideo
+          consent={true}
+          sessionId={captureSessionId}
+          heightMm={Number(height.value) * (height.unit === 'in' ? 25.4 : 10)}
+        />
       )}
       <DecisionLog records={log} />
       </>}

@@ -1,20 +1,21 @@
-import type { QualityDecision } from '../types'
+import type { CircumferenceEstimate, QualityDecision } from '../types'
 
 interface Props {
-  previews?: { front: string | null; side: string | null }
+  previews?: { front: string | null; side: string | null; back: string | null }
   results: QualityDecision[]
   checking: boolean
   error: string | null
   onCheck: () => void
-  onRetake: (view: 'front' | 'side') => void
+  onRetake: (view: 'front' | 'side' | 'back') => void
+  measurementEstimate?: CircumferenceEstimate | null
 }
 
-export function QualityResult({ results, checking, error, onCheck, onRetake, previews }: Props) {
+export function QualityResult({ results, checking, error, onCheck, onRetake, previews, measurementEstimate }: Props) {
   if (results.length === 0) {
     return (
       <section className="step">
         <h1>Quality check</h1>
-        <p>We will check exposure, blur, silhouette framing and possible waist-cord bands on both images.</p>
+        <p>We will check exposure, blur, silhouette framing and possible waist-cord bands on all three images.</p>
         <p className="muted">
           Posture, camera position and natural-waist placement require review. A detected band may be clothing trim.
         </p>
@@ -33,6 +34,7 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
   }
 
   const allProceed = results.every((r) => r.decision === 'proceed')
+  const canEstimate = results.length === 3 && results.every((r) => r.decision !== 'recapture')
 
   return (
     <section className="step">
@@ -82,15 +84,28 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
       </ul>
 
       {allProceed ? (
-        <p className="success">
-          Image quality is acceptable. You may continue to the next step (the measurement engine —
-          a later milestone).
-        </p>
-      ) : (
+        <>
+          <p className="success">Image quality is acceptable.</p>
+        </>
+      ) : !canEstimate ? (
         <p className="error" role="alert">
           Follow the requests above. Review results remain blocked; they are not approved for measurement or export.
         </p>
-      )}
+      ) : measurementEstimate ? <p className="muted">Capture evidence requires review; estimates remain unapproved.</p> : null}
+
+      {measurementEstimate && <section className="estimate-panel" aria-label="Measurement estimates">
+        <h2>Measurement estimates — review required</h2>
+        <div className="measurement-grid">
+          {measurementEstimate.measurements.map((measurement) => <article key={measurement.key}>
+            <strong>{measurement.displayName}</strong>
+            <span>{measurement.value} {measurement.unit}</span>
+            <small>confidence {Math.round(measurement.confidence * 100)}% · ±{measurement.uncertaintyMm / 10} cm · {measurement.provenance}</small>
+          </article>)}
+        </div>
+        <p className="error">{measurementEstimate.warning}</p>
+        <p className="muted">{measurementEstimate.recommendedAction}</p>
+        <p className="muted">Detected views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>
+      </section>}
 
       {!allProceed && (
         <div className="actions">

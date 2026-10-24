@@ -5,7 +5,7 @@ import type { VideoDecision } from '../types'
 /** Backend limit for turn videos (service/app/main.py). */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-export function TurnVideo({ consent, sessionId }: { consent: boolean; sessionId?: string }) {
+export function TurnVideo({ consent, sessionId, heightMm }: { consent: boolean; sessionId?: string; heightMm?: number }) {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState<string | null>(null)
   const [result, setResult] = useState<VideoDecision | null>(null)
@@ -65,7 +65,7 @@ export function TurnVideo({ consent, sessionId }: { consent: boolean; sessionId?
     }
     setBusy(true); setError(''); setResult(null)
     try {
-      setResult(await submitTurnVideoCheck(file, consent, sessionId))
+      setResult(await submitTurnVideoCheck(file, consent, sessionId, heightMm))
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
@@ -92,6 +92,18 @@ export function TurnVideo({ consent, sessionId }: { consent: boolean; sessionId?
           <span className="muted"> ({result.turnCoverage.method})</span>
         </p>
       )}
+      {result.turnCoverage?.backMeasurements && <section className="estimate-panel" aria-label="Experimental back measurements">
+        <h3>Experimental back measurements</h3>
+        <div className="measurement-grid">
+          {result.turnCoverage.backMeasurements.measurements.map(measurement => <article key={measurement.key}>
+            <strong>{measurement.displayName}</strong>
+            <span>{measurement.value} {measurement.unit}</span>
+            <small>confidence {Math.round(measurement.confidence * 100)}% · review required</small>
+          </article>)}
+        </div>
+        <p className="error">{result.turnCoverage.backMeasurements.warning}</p>
+        <p className="muted">Extracted from the back-facing frame at {result.turnCoverage.backMeasurements.timeSeconds}s.</p>
+      </section>}
       <ul>{result.samples.map(s => <li key={s.timeSeconds}>{s.timeSeconds}s: quality {s.quality}</li>)}</ul>
       <p className="muted">{result.scope}</p>
     </div>}

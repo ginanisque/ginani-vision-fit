@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import type { QualityDecision } from './types'
 
-function makeDecision(view: 'front' | 'side', decision: 'recapture' | 'proceed' | 'review'): QualityDecision {
+function makeDecision(view: 'front' | 'side' | 'back', decision: 'recapture' | 'proceed' | 'review'): QualityDecision {
   return {
     id: `${view}-1`,
     decision,
@@ -55,6 +55,10 @@ async function reachReview(user: ReturnType<typeof userEvent.setup>, container: 
   const sideInput = container.querySelector('input[type="file"]') as HTMLInputElement
   await user.upload(sideInput, png())
   await user.click(screen.getByRole('button', { name: /continue/i }))
+
+  const backInput = container.querySelector('input[type="file"]') as HTMLInputElement
+  await user.upload(backInput, png())
+  await user.click(screen.getByRole('button', { name: /continue/i }))
 }
 
 describe('App', () => {
@@ -85,6 +89,7 @@ describe('App', () => {
       .fn()
       .mockResolvedValueOnce(okResponse(makeDecision('front', 'recapture')))
       .mockResolvedValueOnce(okResponse(makeDecision('side', 'proceed')))
+      .mockResolvedValueOnce(okResponse(makeDecision('back', 'proceed')))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
@@ -98,11 +103,12 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /retake side/i })).not.toBeInTheDocument()
   })
 
-  it('allows progression when both images pass', async () => {
+  it('allows progression when all three images pass', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(okResponse(makeDecision('front', 'proceed')))
       .mockResolvedValueOnce(okResponse(makeDecision('side', 'proceed')))
+      .mockResolvedValueOnce(okResponse(makeDecision('back', 'proceed')))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
@@ -119,7 +125,7 @@ describe('App', () => {
     result.reasons = ['Confirm cord placement.']
     result.evidence = [{ kind: 'cord-candidate', label: 'Possible cord', box: { x: 20, y: 100, width: 200, height: 5 } }]
     result.captureChecks = { posture: { status: 'unknown', method: 'human review required' } }
-    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-review', view: 'side' }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-review', view: 'side' })).mockResolvedValueOnce(okResponse({ ...result, id: 'back-review', view: 'back' }))
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
     const { container } = render(<App />)
@@ -139,7 +145,7 @@ describe('App', () => {
     result.reasons = ['Confirm posture.']
     result.evidence = [{ kind: 'pose-landmark', label: 'pose landmark: nose', box: { x: 50, y: 30, width: 2, height: 2 } }]
     result.captureChecks = { posture: { status: 'pass', method: 'MediaPipe Pose landmarks (33-point, provisional)', orientation: 'front', headToFeet: 'pass', postureQuality: 'pass', orientationMethod: 'shoulder/hip landmark geometry' } }
-    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-p', view: 'side' }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-p', view: 'side' })).mockResolvedValueOnce(okResponse({ ...result, id: 'back-p', view: 'back' }))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()

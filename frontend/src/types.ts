@@ -125,7 +125,7 @@ export interface AnalysisDecisionDto {
   createdAt: string
 }
 
-export type Step = 'consent' | 'height' | 'front' | 'side' | 'review'
+export type Step = 'consent' | 'height' | 'front' | 'side' | 'back' | 'review'
 
 export interface ConsentState {
   agreed: boolean
@@ -160,7 +160,7 @@ export interface CaptureChecks {
 export interface QualityDecision {
   id: string
   decision: 'recapture' | 'proceed' | 'review'
-  view: 'front' | 'side'
+  view: 'front' | 'side' | 'back'
   imageFingerprint: { sha256: string }
   dimensions: { width: number; height: number }
   checks: {
@@ -187,12 +187,52 @@ export interface QualityDecision {
   analysisRunId?: string
 }
 
+export interface CircumferenceEstimate {
+  status: 'review_required'
+  modelVersion: string
+  registryVersion: string
+  method: string
+  warning: string
+  orientations: { front: string; side: string; back: string }
+  levels: { front: Record<string, number>; side: Record<string, number>; back: Record<string, number> }
+  recommendedAction: string
+  targetedManualCheck: { key: string; displayName: string; reason: string }
+  trainingFeatures: { heightMm: number; rawMeasurementsMm: Record<string, number> }
+  measurements: Array<{
+    key: string
+    displayName: string
+    value: number
+    unit: 'cm'
+    rawValueMm: number
+    uncertaintyMm: number
+    confidence: number
+    requiresReview: true
+    sourceViews: Array<'front' | 'side' | 'back'>
+    provenance: string
+    evidence: Record<string, number>
+  }>
+}
+
 export interface TurnCoverage {
   status: 'complete' | 'incomplete' | 'unknown'
   seenViews: string[]
   missingViews: string[]
   orientations: Array<{ timeSeconds: number; orientation: string }>
   method: string
+  backMeasurements?: {
+    status: 'experimental'
+    method: string
+    warning: string
+    timeSeconds: number
+    measurements: Array<{
+      key: 'across_back' | 'nape_to_cb_waist'
+      displayName: string
+      value: number
+      unit: 'cm'
+      confidence: number
+      requiresReview: true
+    }>
+  } | null
 }
 
 export interface VideoDecision {

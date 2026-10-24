@@ -273,10 +273,15 @@ async def measurement_analysis(session_id: str, _admin: SessionUser = Depends(re
         ).fetchall()
     available_views = {row["view"] for row in view_rows}
     available_landmarks = {row["landmark_key"] for row in landmark_rows}
+    pose_basis = {"left_shoulder", "right_shoulder", "left_hip", "right_hip"}
+    geometry_ready = pose_basis.issubset(available_landmarks)
     analyses = []
     for definition in DEFINITIONS:
         missing_views = sorted(set(definition.required_views) - available_views)
-        missing_landmarks = sorted(set(definition.required_landmarks) - available_landmarks)
+        # VF-3 derives bust/underbust/waist levels, silhouettes, nape and bust
+        # control points from the calibrated pose basis. They are provenance
+        # labels in the registry, not all native MediaPipe landmark names.
+        missing_landmarks = [] if geometry_ready else sorted(pose_basis - available_landmarks)
         missing_calibration = session["height_mm"] is None
         status = "ready_for_estimation" if not missing_views and not missing_landmarks and not missing_calibration else "blocked"
         analyses.append({
@@ -289,6 +294,7 @@ async def measurement_analysis(session_id: str, _admin: SessionUser = Depends(re
     return {
         "sessionId": session_id, "heightMm": float(session["height_mm"]) if session["height_mm"] else None,
         "availableViews": sorted(available_views), "availableLandmarks": sorted(available_landmarks),
+        "derivedLandmarksAvailable": geometry_ready,
         "readyCount": sum(item["status"] == "ready_for_estimation" for item in analyses),
         "blockedCount": sum(item["status"] == "blocked" for item in analyses),
         "measurements": analyses,

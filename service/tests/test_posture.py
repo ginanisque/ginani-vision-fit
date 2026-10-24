@@ -182,6 +182,28 @@ def test_turn_coverage_complete(monkeypatch, tmp_path):
     assert coverage["missingViews"] == []
 
 
+def test_turn_coverage_extracts_measurements_from_best_back_frame(monkeypatch, tmp_path):
+    poses = [front_landmarks(), side_landmarks(), back_landmarks()]
+    state = {"i": 0}
+
+    def fake_estimate(frame, pose=None):
+        result = poses[state["i"] % len(poses)]
+        state["i"] += 1
+        return result
+
+    expected = {"status": "experimental", "measurements": [{"key": "across_back", "value": 40.0}]}
+    monkeypatch.setattr(main_module, "load_pose", lambda: object())
+    monkeypatch.setattr(main_module, "estimate_pose", fake_estimate)
+    monkeypatch.setattr(main_module, "estimate_back_measurements", lambda frame, height, landmarks: dict(expected))
+    reader, count = _make_video(tmp_path)
+    try:
+        coverage = main_module.turn_coverage(reader, count, count / 10.0, 1700)
+    finally:
+        reader.release()
+    assert coverage["backMeasurements"]["measurements"][0]["key"] == "across_back"
+    assert "timeSeconds" in coverage["backMeasurements"]
+
+
 def test_turn_coverage_incomplete(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "load_pose", lambda: object())
     monkeypatch.setattr(main_module, "estimate_pose", lambda frame, pose=None: front_landmarks())
