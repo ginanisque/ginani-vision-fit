@@ -1,4 +1,9 @@
-# Ginani VisionFit — Milestone VF-0
+# Ginani VisionFit — ordered-keypoint measurement runtime
+
+VisionFit executes versioned, administrator-published paths made from the exact COCO v6 tailoring
+keypoint names. Consecutive points form measured segments; circumference paths close from the last
+point back to the first. Body-outline masks support capture checks and per-view scale calibration
+only. They are not measurement points. Missing keypoints block the affected measurement for review.
 
 The first working VisionFit milestone: a standalone, local capture-guidance interface plus a
 Python service with **pinned OpenCV 5** that runs a real exposure/blur quality check and returns

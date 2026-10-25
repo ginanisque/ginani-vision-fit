@@ -13,6 +13,13 @@ dist/
 test-results/
 playwright-report/
 
+# Local project notes and source archives
+*.md
+!README.md
+!**/README.md
+dataset-training/
+*.zip
+
 # MediaPipe pose model (fetched via an explicit step, see service/README.md)
 *.task
 

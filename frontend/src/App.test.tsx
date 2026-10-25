@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
+import * as api from './lib/api'
 import type { QualityDecision } from './types'
 
 function makeDecision(view: 'front' | 'side' | 'back', decision: 'recapture' | 'proceed' | 'review'): QualityDecision {
@@ -41,6 +42,8 @@ function okResponse(body: unknown): Response {
 const png = () => new File(['fake'], 'image.png', { type: 'image/png' })
 
 async function reachReview(user: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
+  await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
+  await user.click(screen.getByRole('button', { name: 'Capture' }))
   await user.click(screen.getByLabelText(/consent to my body photos/i))
   await user.click(screen.getByLabelText(/understand why captures/i))
   await user.click(screen.getByRole('button', { name: /continue/i }))
@@ -64,15 +67,20 @@ async function reachReview(user: ReturnType<typeof userEvent.setup>, container: 
 describe('App', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
+    vi.spyOn(api, 'loadAuthSession').mockResolvedValue({ user: { email: 'customer@example.test', role: 'customer' } })
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('gates the consent step', async () => {
     const user = userEvent.setup()
     render(<App />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Capture' }))
 
     const continueBtn = screen.getByRole('button', { name: /continue/i })
     expect(continueBtn).toBeDisabled()

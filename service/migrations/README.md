@@ -1,12 +1,17 @@
 # Neon database setup
 
 1. Create a Neon project and copy both pooled and direct Postgres connection strings.
-2. Store them server-side as `DATABASE_URL_POOLED` and `DATABASE_URL`; never expose either in a `VITE_*` variable.
+2. Store them server-side as `DATABASE_URL` (pooled application traffic) and
+   `DATABASE_URL_UNPOOLED` (direct migrations); never expose either in a `VITE_*` variable.
 3. Run migrations in numeric order in the Neon SQL Editor, or run:
 
    ```bash
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_neon_setup.sql
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_managed_auth_cleanup.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/001_neon_setup.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/002_managed_auth_cleanup.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/003_measurement_path_versions.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/004_tailoring_keypoint_paths.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/005_archive_underbust_circumference.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/006_runtime_integrity.sql
    ```
 
 The schema stores structured data and private object-storage references. Body images and videos

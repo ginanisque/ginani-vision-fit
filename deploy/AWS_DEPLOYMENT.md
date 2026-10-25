@@ -4,6 +4,8 @@ This deploys the **processing API** as a container on Amazon ECS Express Mode. T
 remain hosted separately and call this API. The service runs OpenCV 5 and MediaPipe Pose, verifies
 Neon Auth JWTs, writes application data to Neon Postgres, and stores captures privately in Neon
 Object Storage. ECS receives credentials from AWS Secrets Manager rather than from the image.
+The VF-3 runtime calls the configured Roboflow keypoint Workflow and executes published ordered
+COCO v6 paths; segmentation is optional and is never used as a measurement-point sequence.
 
 ## Why ECS Express Mode
 
@@ -22,7 +24,9 @@ at one task. Review the AWS estimate and grant terms before running it.
   to create them if they are not already present.
 - A Secrets Manager JSON secret whose execution role can read, containing these keys:
   `DATABASE_URL_POOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`,
-  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_BUCKET`.
+  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_BUCKET`,
+  `ROBOFLOW_ENABLED`, `ROBOFLOW_API_KEY`, `ROBOFLOW_WORKSPACE`, and
+  `ROBOFLOW_KEYPOINT_WORKFLOW_ID`.
 - A bash-compatible terminal (WSL or Git Bash on Windows).
 
 ## Deploy the API

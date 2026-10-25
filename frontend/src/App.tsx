@@ -81,6 +81,7 @@ export default function App() {
         try {
           setMeasurementEstimate(await submitMeasurementEstimate(
             front.file, side.file, back.file, numericHeight, consent.agreed && consent.acknowledged,
+            activeSessionId,
           ))
         } catch (estimateError) {
           setError(estimateError instanceof Error ? estimateError.message : String(estimateError))

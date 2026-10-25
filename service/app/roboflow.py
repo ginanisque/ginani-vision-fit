@@ -24,7 +24,16 @@ def configuration_status() -> dict:
     segmentation = os.getenv("ROBOFLOW_SEGMENTATION_WORKFLOW_ID", "").strip()
     has_key = bool(os.getenv("ROBOFLOW_API_KEY", "").strip())
     enabled = _truthy("ROBOFLOW_ENABLED")
-    configured = bool(workspace and keypoint and segmentation and has_key)
+    placeholders = {
+        "first-workflow-id", "second-workflow-id", "your-workflow-id",
+        "keypoint-workflow-id", "segmentation-workflow-id",
+    }
+    keypoint_configured = bool(keypoint and keypoint.lower() not in placeholders)
+    segmentation_configured = bool(segmentation and segmentation.lower() not in placeholders)
+    keypoints_ready = bool(enabled and workspace and keypoint_configured and has_key)
+    segmentation_ready = bool(enabled and workspace and segmentation_configured and has_key)
+    configured = bool(workspace and keypoint_configured and has_key)
+    placeholder_configured = bool(keypoint and not keypoint_configured)
     return {
         "enabled": enabled,
         "configured": configured,
@@ -32,9 +41,13 @@ def configuration_status() -> dict:
         "keypointWorkflow": keypoint or None,
         "segmentationWorkflow": segmentation or None,
         "ready": enabled and configured,
+        "keypointsReady": keypoints_ready,
+        "segmentationReady": segmentation_ready,
         "reason": None if enabled and configured else (
             "Set ROBOFLOW_ENABLED=true after consent/privacy approval." if configured
-            else "Roboflow workspace, API key, and both workflow IDs are required."
+            else "Replace the placeholder Roboflow keypoint workflow ID with the deployed workflow ID."
+            if placeholder_configured
+            else "Roboflow workspace, API key, and keypoint workflow ID are required."
         ),
     }
 
@@ -79,10 +92,10 @@ def analyze_measurement_capture(image: bytes) -> dict:
     status = configuration_status()
     if not status["ready"]:
         return {**status, "status": "disabled"}
-    workflows = {
-        "keypoints": os.environ["ROBOFLOW_KEYPOINT_WORKFLOW_ID"].strip(),
-        "segmentation": os.environ["ROBOFLOW_SEGMENTATION_WORKFLOW_ID"].strip(),
-    }
+    workflows = {"keypoints": os.environ["ROBOFLOW_KEYPOINT_WORKFLOW_ID"].strip()}
+    segmentation = os.getenv("ROBOFLOW_SEGMENTATION_WORKFLOW_ID", "").strip()
+    if segmentation:
+        workflows["segmentation"] = segmentation
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {name: executor.submit(_run_workflow, workflow, image) for name, workflow in workflows.items()}
         outputs = {name: future.result() for name, future in futures.items()}
@@ -91,3 +104,12 @@ def analyze_measurement_capture(image: bytes) -> dict:
         "status": "complete" if all(item["status"] == "complete" for item in outputs.values()) else "failed",
         "models": outputs,
     }
+
+
+def analyze_keypoint_capture(image: bytes) -> dict:
+    """Run only the tailoring-keypoint workflow used by ordered measurement paths."""
+    status = configuration_status()
+    if not status["keypointsReady"]:
+        return {**status, "status": "disabled"}
+    result = _run_workflow(os.environ["ROBOFLOW_KEYPOINT_WORKFLOW_ID"].strip(), image)
+    return {**status, **result}

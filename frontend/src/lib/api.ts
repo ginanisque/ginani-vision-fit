@@ -1,4 +1,4 @@
-import type { AnalysisDecisionDto, AuthSession, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
+import type { AnalysisDecisionDto, AuthSession, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementPathDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
 import { authClient, bearerToken } from './auth-client'
 
 export interface SubmitOptions {
@@ -75,7 +75,7 @@ export async function submitCaptureCheck(
 }
 
 export async function submitMeasurementEstimate(
-  front: File, side: File, back: File, heightMm: number, consent: boolean,
+  front: File, side: File, back: File, heightMm: number, consent: boolean, sessionId?: string,
 ): Promise<CircumferenceEstimate> {
   const form = new FormData()
   form.append('front', front)
@@ -83,6 +83,7 @@ export async function submitMeasurementEstimate(
   form.append('back', back)
   form.append('height_mm', String(heightMm))
   form.append('consent', String(consent))
+  if (sessionId) form.append('session_id', sessionId)
   let response: Response
   try {
     response = await fetch(apiUrl('/api/measurement-estimates'), {
@@ -140,6 +141,36 @@ export async function getMeasurementDefinitions(): Promise<MeasurementDefinition
   const response = await fetch(apiUrl('/api/measurements/definitions'))
   if (!response.ok) throw new Error('Could not load measurement definitions.')
   return (await response.json()).definitions
+}
+
+export async function getMeasurementPaths(): Promise<MeasurementPathDto[]> {
+  const response = await fetch(apiUrl('/api/admin/measurement-paths'), { headers: await authorization() })
+  if (!response.ok) throw new Error(`Could not load measurement paths: ${await response.text()}`)
+  return (await response.json()).paths
+}
+
+export async function saveMeasurementPathDraft(
+  key: string,
+  path: Pick<MeasurementPathDto, 'path' | 'closed' | 'orderedPoints' | 'segmentViews' | 'requiredViews' | 'calculationMethod'>,
+): Promise<MeasurementPathDto> {
+  const response = await fetch(apiUrl(`/api/admin/measurement-paths/${key}/draft`), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...(await authorization()) },
+    body: JSON.stringify({
+      path: path.path, closed: path.closed, ordered_points: path.orderedPoints,
+      segment_views: path.segmentViews,
+      required_views: path.requiredViews, calculation_method: path.calculationMethod,
+    }),
+  })
+  if (!response.ok) throw new Error(`Could not save path draft: ${await response.text()}`)
+  return await response.json()
+}
+
+export async function publishMeasurementPath(key: string): Promise<MeasurementPathDto> {
+  const response = await fetch(apiUrl(`/api/admin/measurement-paths/${key}/publish`), {
+    method: 'POST', headers: await authorization(),
+  })
+  if (!response.ok) throw new Error(`Could not publish path: ${await response.text()}`)
+  return await response.json()
 }
 
 export async function createMeasurementTable(subjectId: string, captureSessionId?: string, _token?: string): Promise<MeasurementTableDto> {

@@ -14,6 +14,8 @@ from .storage import delete_private, put_private, signed_download_url
 
 
 def ensure_session(user: SessionUser, session_id: str | None, height_mm: float | None = None) -> UUID:
+    if height_mm is not None and not 1000 <= height_mm <= 2500:
+        raise ValueError("Height must be between 1000 and 2500 mm")
     with connection() as conn:
         if session_id:
             row = conn.execute(
@@ -55,26 +57,31 @@ def persist_analysis(
                 (session_id, view, key, content_type, len(data), hashlib.sha256(data).hexdigest(),
                  width, height, duration_seconds),
             ).fetchone()
+            measurement_vision = record.get("measurementVision", {})
+            keypoint_workflow = measurement_vision.get("keypointWorkflow")
+            model_name = "visionfit-capture+roboflow" if keypoint_workflow else "visionfit-opencv-mediapipe"
+            model_version = keypoint_workflow or "vf2-posture-1"
             run = conn.execute(
                 """insert into analysis_runs
                         (session_id, model_name, model_version, status, quality_decision,
                          calibration, started_at, completed_at)
-                     values (%s, 'visionfit-opencv-mediapipe', 'vf2-posture-1', 'complete',
-                             %s, '{}'::jsonb, now(), now()) returning id""",
-                (session_id, Jsonb(record)),
+                     values (%s, %s, %s, 'complete', %s, '{}'::jsonb, now(), now()) returning id""",
+                (session_id, model_name, model_version, Jsonb(record)),
             ).fetchone()
             for item in record.get("evidence", []):
-                if item.get("kind") != "pose-landmark" or not width or not height:
+                if item.get("kind") not in {"pose-landmark", "tailoring-keypoint"} or not width or not height:
                     continue
                 box = item["box"]
                 label = item.get("label", "").removeprefix("pose landmark: ")
+                source = "roboflow_keypoint" if item.get("kind") == "tailoring-keypoint" else "mediapipe_pose"
                 conn.execute(
                     """insert into detected_landmarks
                             (analysis_run_id, asset_id, landmark_key, x_normalized, y_normalized,
                              visibility, source)
-                         values (%s, %s, %s, %s, %s, 1, 'mediapipe_pose')
+                         values (%s, %s, %s, %s, %s, %s, %s)
                          on conflict (analysis_run_id, asset_id, landmark_key) do nothing""",
-                    (run["id"], asset["id"], label, box["x"] / width, box["y"] / height),
+                    (run["id"], asset["id"], label, box["x"] / width, box["y"] / height,
+                     item.get("confidence", 1), source),
                 )
             conn.execute("update capture_sessions set status = 'complete' where id = %s", (session_id,))
         return {
@@ -84,6 +91,37 @@ def persist_analysis(
     except Exception:
         delete_private(key)
         raise
+
+
+def session_tailoring_keypoints(user: SessionUser, session_id: str) -> dict[str, list[dict]]:
+    """Return the latest stored Roboflow points per capture view for this customer."""
+    with connection() as conn:
+        session = conn.execute(
+            "select id from capture_sessions where id::text = %s and customer_id = %s",
+            (session_id, user.id),
+        ).fetchone()
+        if session is None:
+            raise PermissionError("Capture session not found for this customer")
+        rows = conn.execute(
+            """select distinct on (asset.view, landmark.landmark_key)
+                      asset.view::text view, landmark.landmark_key,
+                      landmark.x_normalized, landmark.y_normalized, landmark.visibility
+                 from detected_landmarks landmark
+                 join analysis_runs run on run.id = landmark.analysis_run_id
+                 join capture_assets asset on asset.id = landmark.asset_id
+                where run.session_id = %s and landmark.source = 'roboflow_keypoint'
+                  and asset.view in ('front','side','back')
+                order by asset.view, landmark.landmark_key, run.created_at desc""",
+            (session["id"],),
+        ).fetchall()
+    points: dict[str, list[dict]] = {"front": [], "side": [], "back": []}
+    for row in rows:
+        points[row["view"]].append({
+            "name": row["landmark_key"], "x": float(row["x_normalized"]),
+            "y": float(row["y_normalized"]),
+            "confidence": float(row["visibility"] if row["visibility"] is not None else 1),
+        })
+    return points
 
 
 def recent_decisions(limit: int) -> list[dict]:

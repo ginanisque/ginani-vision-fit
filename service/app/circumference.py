@@ -26,7 +26,7 @@ LEVELS = {
 ACROSS_CHEST_FRACTION = 0.25
 MODEL_VERSION = "vf3-geometry-1"
 CORE_KEYS = (
-    "bust", "underbust", "bust_point", "bust_span", "bust_radius", "waist",
+    "bust", "underbust", "bust_point", "bust_span", "bust_radius", "waist", "hip",
     "front_shoulder", "back_shoulder", "across_chest", "across_back",
     "nape_to_waist", "full_front_length",
 )
@@ -207,7 +207,7 @@ def estimate_circumferences(
 
     raw: dict[str, float] = {}
     feature_rows: dict[str, dict[str, float]] = {}
-    for key in ("bust", "underbust", "waist"):
+    for key in ("bust", "underbust", "waist", "hip"):
         width_mm = front_widths[key] * front_scale
         depth_mm = side_widths[key] * side_scale
         raw[key] = ellipse_perimeter(width_mm, depth_mm)
@@ -249,7 +249,7 @@ def estimate_circumferences(
     profile = _load_calibration_profile()
     names = {
         "bust": "Bust", "underbust": "Underbust", "bust_point": "Bust point length",
-        "bust_span": "Bust span", "bust_radius": "Bust radius", "waist": "Waist",
+        "bust_span": "Bust span", "bust_radius": "Bust radius", "waist": "Waist", "hip": "Hip",
         "front_shoulder": "Front shoulder", "back_shoulder": "Back shoulder",
         "across_chest": "Across chest", "across_back": "Across back",
         "nape_to_waist": "Nape to waist", "full_front_length": "Full front length",
@@ -258,7 +258,7 @@ def estimate_circumferences(
     source_views = {
         "bust": ["front", "side"], "underbust": ["front", "side"],
         "bust_point": ["front", "side"], "bust_span": ["front"],
-        "bust_radius": ["front", "side"], "waist": ["front", "side", "back"],
+        "bust_radius": ["front", "side"], "waist": ["front", "side", "back"], "hip": ["front", "side"],
         "front_shoulder": ["front"], "back_shoulder": ["back"],
         "across_chest": ["front"], "across_back": ["back"],
         "nape_to_waist": ["back"], "full_front_length": ["front", "side"],
@@ -270,7 +270,7 @@ def estimate_circumferences(
     if back is not None:
         for key in ("back_shoulder", "across_back", "nape_to_waist"):
             confidences[key] = min(back_visibility, 1.0) * (0.38 if key in inferred else 0.52)
-    default_mae = {key: (45.0 if key in ("bust", "underbust", "waist") else 30.0) for key in CORE_KEYS}
+    default_mae = {key: (45.0 if key in ("bust", "underbust", "waist", "hip") else 30.0) for key in CORE_KEYS}
     values = []
     for key in CORE_KEYS:
         value_mm, mae_mm = _apply_profile(key, raw[key], profile, default_mae[key])

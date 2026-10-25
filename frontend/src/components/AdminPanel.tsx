@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AnalysisDecisionDto, CaptureSessionDetailDto, CaptureSessionSummaryDto, CustomerDto, MeasurementDefinitionDto, MeasurementReadinessDto, MeasurementRowDto, MeasurementTableDto } from '../types'
 import { createMeasurementTable, getAnalysisDecisions, getCaptureSession, getCaptureSessions, getCustomers, getMeasurementAnalysis, getMeasurementDefinitions, updateMeasurementValue } from '../lib/api'
+import { MeasurementPathEditor } from './MeasurementPathEditor'
 
 export function AdminPanel() {
   const [definitions, setDefinitions] = useState<MeasurementDefinitionDto[]>([])
@@ -102,6 +103,8 @@ export function AdminPanel() {
         </section>
       </div>
 
+      <MeasurementPathEditor definitions={definitions} />
+
       <section className="admin-card capture-review-card">
         <div className="section-heading"><div><h2>Capture review</h2><p className="muted">Private assets are available through short-lived review links. The database stores their keys and analysis metadata.</p></div></div>
         {!sessionDetail && <p className="muted empty-state">Select a registered person and capture session.</p>}
@@ -131,7 +134,7 @@ export function AdminPanel() {
       <section className="admin-card table-card measurement-analysis-card">
         <div className="section-heading"><div><h2>Measurement analysis</h2><p className="muted">Evidence readiness is evaluated separately for every measurement. Blocked values are never presented as estimates.</p></div>{readiness && <span className="readiness-count">{readiness.readyCount} ready · {readiness.blockedCount} blocked</span>}</div>
         {readiness && <div className="table-scroll"><table><thead><tr><th>Measurement</th><th>Required views</th><th>Required landmarks</th><th>Readiness</th><th>Missing evidence</th></tr></thead><tbody>
-          {readiness.measurements.map((item) => <tr key={item.key}><td><strong>{item.displayName}</strong><small>{item.calculation}</small></td><td>{item.requiredViews.join(' · ')}</td><td>{item.requiredLandmarks.join(' · ')}</td><td><span className={`status-pill ${item.status}`}>{item.status === 'ready_for_estimation' ? 'ready' : 'blocked'}</span></td><td>{[...item.missingViews.map((v) => `${v} view`), ...item.missingLandmarks, ...(item.missingCalibration ? ['height calibration'] : [])].join(', ') || '—'}</td></tr>)}
+          {readiness.measurements.map((item) => <tr key={item.key}><td><strong>{item.displayName}</strong><small>{item.calculation}</small></td><td>{item.requiredViews.join(' · ')}</td><td>{item.requiredLandmarks.join(' · ')}</td><td><span className={`status-pill ${item.status}`}>{item.status === 'ready_for_estimation' ? 'ready' : item.status === 'manual_required' ? 'manual' : 'blocked'}</span></td><td>{item.status === 'manual_required' ? item.message : [...item.missingViews.map((v) => `${v} view`), ...item.missingLandmarks, ...(item.missingCalibration ? ['height calibration'] : [])].join(', ') || '—'}</td></tr>)}
         </tbody></table></div>}
       </section>
 

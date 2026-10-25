@@ -2,6 +2,8 @@
 
 The public landing page and authenticated capture app are one Vite application. Amplify builds
 `frontend/` using the repository-level `amplify.yml` and publishes its `dist/` directory.
+The administrator workspace includes the Measurement Path Editor; path versions and ordered COCO
+key names are served by the authenticated backend API, not embedded in the Amplify bundle.
 
 ## Target
 

@@ -1,4 +1,5 @@
 import cv2
+import asyncio
 import numpy as np
 import pytest
 from uuid import uuid4
@@ -32,6 +33,21 @@ def subject(cord=True, clipped=False, duplicate=False):
 
 
 def encoded(image): return cv2.imencode('.png',image)[1].tobytes()
+
+
+class MemoryUpload:
+    content_type = 'image/png'
+
+    def __init__(self, name, data):
+        self.filename = name
+        self.data = data
+
+    async def read(self, _limit=-1):
+        return self.data
+
+
+def uploaded(name, data):
+    return MemoryUpload(name, data)
 
 
 def test_candidate_requires_review():
@@ -85,6 +101,69 @@ def test_capture_is_recorded():
         assert r.status_code == 200
         assert r.json()['decision'] == 'review'
         assert r.json()['analysisRunId']
+
+
+def test_measurement_runtime_executes_published_keypoint_order(monkeypatch):
+    import app.main as main_module
+    names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",
+             "bust_point_right", "bust_level_right_side", "bust_level_center_back"]
+    monkeypatch.setattr(main_module, "analyze_keypoint_capture", lambda _data: {
+        "status": "complete", "output": [{"name": name, "x": 10 + index * 10, "y": 50, "confidence": .9}
+                                          for index, name in enumerate(names)]
+    })
+    monkeypatch.setattr(main_module, "view_scale_mm_per_pixel", lambda _image, _height: 2.0)
+    monkeypatch.setattr(main_module, "published_measurement_paths", lambda: [{
+        "id": "bust-v2", "measurementKey": "bust", "displayName": "Bust", "version": 2,
+        "path": "circumference", "closed": True, "orderedPoints": names,
+        "segmentViews": ["front", "front", "front", "front", "back", "back"],
+        "requiredViews": ["front", "back"],
+    }])
+    image = encoded(subject())
+    user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
+    body = asyncio.run(main_module.measurement_estimates(
+        True, 1650, None, uploaded('front.png', image), uploaded('side.png', image),
+        uploaded('back.png', image), user,
+    ))
+    assert body['method'] == 'published ordered tailoring-keypoint paths + calibration profile'
+    assert body['measurements'][0]['orderedPoints'] == names
+    assert body['measurements'][0]['pathVersion'] == 2
+
+
+def test_measurement_runtime_reuses_session_points_calibrates_and_persists(monkeypatch):
+    import app.main as main_module
+    names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",
+             "bust_point_right", "bust_level_right_side", "bust_level_center_back"]
+    stored = [{"name": name, "x": .1 + index * .05, "y": .5, "confidence": .9}
+              for index, name in enumerate(names)]
+    monkeypatch.setattr(main_module, "session_tailoring_keypoints",
+                        lambda *_args, **_kwargs: {"front": stored, "side": stored, "back": stored})
+    monkeypatch.setattr(main_module, "analyze_keypoint_capture",
+                        lambda _data: pytest.fail("stored points should prevent duplicate inference"))
+    monkeypatch.setattr(main_module, "view_scale_mm_per_pixel", lambda _image, _height: 2.0)
+    monkeypatch.setattr(main_module, "published_measurement_paths", lambda: [{
+        "id": "bust-v2", "measurementKey": "bust", "displayName": "Bust", "version": 2,
+        "path": "circumference", "closed": True, "orderedPoints": names,
+        "segmentViews": ["front", "front", "front", "front", "back", "back"],
+        "requiredViews": ["front", "back"],
+    }])
+    monkeypatch.setattr(main_module, "_load_calibration_profile", lambda: {
+        "version": "calibrated-test", "factor": {"bust": 2}, "biasMm": {}, "maeMm": {"bust": 12},
+    })
+    persisted = {}
+    monkeypatch.setattr(main_module, "persist_runtime_estimates", lambda **kwargs: (
+        persisted.update(kwargs) or {"measurementTableId": "table-1", "persistedKeys": ["bust"], "skippedKeys": []}
+    ))
+    image = encoded(subject())
+    user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
+    body = asyncio.run(main_module.measurement_estimates(
+        True, 1650, str(uuid4()), uploaded('front.png', image), uploaded('side.png', image),
+        uploaded('back.png', image), user,
+    ))
+    assert body['modelVersion'] == 'calibrated-test'
+    assert body['measurements'][0]['uncertaintyMm'] == 12
+    assert body['measurements'][0]['rawValueMm'] * 2 == body['measurements'][0]['value'] * 10
+    assert body['measurementTableId'] == 'table-1'
+    assert persisted['estimates'][0]['pathVersionId'] == 'bust-v2'
 
 
 def test_bad_video():

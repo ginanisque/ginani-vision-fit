@@ -207,6 +207,22 @@ a { color: inherit; }
   text-transform: capitalize;
 }
 
+.path-editor { margin-top: 18px; }
+.path-editor-grid { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(320px, 1.3fr); gap: 24px; margin-top: 16px; }
+.path-editor fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; padding: 12px; }
+.path-editor fieldset label { margin-right: 14px; text-transform: capitalize; }
+.ordered-points { list-style-position: inside; padding: 0; margin: 8px 0; display: grid; gap: 7px; }
+.ordered-points li { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: rgba(8, 23, 41, .55); }
+.ordered-points li span { display: flex; gap: 5px; }
+.ordered-points button { padding: 5px 8px; }
+.path-loop { color: var(--gold); font-size: .8rem; }
+.point-adder { display: flex; gap: 8px; margin-top: 12px; }
+.point-adder input { min-width: 0; flex: 1; }
+
+@media (max-width: 720px) {
+  .path-editor-grid { grid-template-columns: 1fr; }
+}
+
 .wizard {
   margin-top: 24px;
   max-width: 720px;

@@ -11,26 +11,71 @@ but they do not supply tailoring landmarks such as bust apex, underbust, natural
 OpenCV and MediaPipe remain responsible for inexpensive capture quality, framing, orientation, and
 posture gates. Roboflow predictions are measurement evidence, not automatically approved measurements.
 
-## Keypoint annotation schema
+## Keypoint annotation schema — COCO v6
 
-Start with this versioned skeleton and keep left/right names explicit:
+The runtime uses the exact dataset keys; it does not translate silhouette labels into measurement
+points. The v6 export contains:
 
-- crown, nape, left/right side-neck point
-- left/right shoulder tip
-- left/right bust apex, bust level centre, underbust level centre
-- left/right waist, front/back waist centre
-- left/right high hip, left/right full hip
-- left/right elbow, wrist, crotch, knee, ankle, heel and floor contact
+```text
+nape, center_front_neck, side_neck_left, side_neck_right,
+bust_point_left, bust_point_right, underbust_left, underbust_right,
+waist_below_bust_left, waist_below_bust_right,
+waist_center_front, waist_center_back, waist_left_side, waist_right_side,
+hip_center_front, hip_center_back, hip_side_right, hip_side_left,
+bust_level_center_front, bust_level_center_back,
+bust_level_left_side, bust_level_right_side,
+across_chest_right, across_chest_left,
+shoulder_point_left, shoulder_point_right,
+knee_right, knee_left, ankle_left, ankle_right,
+across_back_right, across_back_left,
+elbow_right, wrist_right, elbow_left, wrist_left
+```
+
+The published bust path is:
+
+```text
+bust_level_left_side → bust_point_left → bust_level_center_front →
+bust_point_right → bust_level_right_side → bust_level_center_back → close
+```
+
+The published hip path is:
+
+```text
+hip_side_left → hip_center_front → hip_side_right → hip_center_back → close
+```
+
+The v6 skeleton already contains these edges. `underbust_left/right` are point endpoints used by
+bust radius (`bust_point_left → underbust_left`, with the right-side equivalent available). They do
+not define an underbust circumference. No automated underbust-circumference path is published; that
+measurement remains manual until a future dataset explicitly defines its complete loop.
 
 Annotate visibility and do not guess an occluded landmark. Label front, side, and back views separately.
 Capture varied body shapes, skin tones, fitted garments, lighting, cameras, backgrounds, and clinically
-safe/consented adult subjects. Keep each person in only one of train, validation, or test to prevent leakage.
+safe/consented adult subjects. Keep each person and all frames from the same source video in only one
+of train, validation, or test. Copy `docs/subject_manifest.example.csv`, maintain one row per
+source sequence with `source_group,subject_id,split`, then run:
 
-## Segmentation annotation
+```bash
+cd visionfit/service
+./.venv/bin/python scripts/validate_coco_dataset.py ../../dataset-training/your-export.zip \
+  --manifest ../../dataset-training/subjects.csv
+```
 
-Label the visible body/clothing silhouette as a single instance. Exclude shadows, loose background objects,
-and helpers. Decide once whether hair and footwear belong to the mask; for body dimensions they normally do
-not. Record that policy in the dataset version notes.
+## Segmentation annotation and its limited role
+
+Label the visible body/clothing silhouette as a single instance. It is used for capture evidence and
+height-to-pixel calibration only. It is not an ordered measurement point and is not summed into bust,
+waist, shoulder, or length paths.
+
+## Runtime calculation
+
+For each published definition, the service loads its ordered point names, connects each adjacent pair
+in the administrator-assigned segment view, closes circumference loops, converts pixels to
+millimetres using per-view height calibration, and returns every segment as evidence. If no permitted
+view contains both endpoints, that measurement is blocked.
+
+When output contains several people, the runtime selects one complete primary instance before
+normalizing points; it never combines high-confidence points from different people.
 
 ## Validation
 
@@ -62,6 +107,6 @@ The API key must stay in the backend secret store, never in Vite or browser vari
 AWS Secrets Manager runtime secret before redeploying ECS. Enabling hosted processing uploads consented
 captures to Roboflow, so update the privacy notice, retention terms, and data-processing agreement first.
 
-The backend stores trimmed structured model output in the analysis decision. A later normalization adapter
-must map the exact Workflow output schema into `detected_landmarks` and silhouette geometry after the first
-workflow versions are known.
+The backend normalizes common Workflow keypoint output shapes into the exact v6 names, stores detected
+tailoring points, and executes the currently published path version. `front_silhouette`,
+`side_silhouette`, and `back_silhouette` are legacy geometry terms and must not be added to a path.

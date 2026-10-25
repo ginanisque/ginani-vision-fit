@@ -16,6 +16,7 @@ const EXPECTED_CORE_KEYS = [
   'bust_span',
   'bust_radius',
   'waist',
+  'hip',
   'front_shoulder',
   'back_shoulder',
   'across_chest',
@@ -29,8 +30,8 @@ describe('registry integrity', () => {
     expect(MEASUREMENT_REGISTRY_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('has exactly the 12 core measurements in the required order', () => {
-    expect(CORE_MEASUREMENTS).toHaveLength(12)
+  it('has exactly the 13 core measurements in the required order', () => {
+    expect(CORE_MEASUREMENTS).toHaveLength(13)
     expect(coreMeasurementKeys()).toEqual(EXPECTED_CORE_KEYS)
   })
 

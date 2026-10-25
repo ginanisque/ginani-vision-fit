@@ -104,7 +104,13 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
         </div>
         <p className="error">{measurementEstimate.warning}</p>
         <p className="muted">{measurementEstimate.recommendedAction}</p>
+        {measurementEstimate.measurementTableId &&
+          <p className="success">Saved to the linked measurement table for admin review.</p>}
         <p className="muted">Detected views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>
+        {!!measurementEstimate.blockedMeasurements?.length && <div className="blocked-measurements">
+          <h3>Blocked measurements</h3>
+          <ul>{measurementEstimate.blockedMeasurements.map(item => <li key={item.key}><strong>{item.displayName}</strong>: missing {item.missingSegments.map(segment => `${segment.from} → ${segment.to} (${segment.view})`).join(', ')}</li>)}</ul>
+        </div>}
       </section>}
 
       {!allProceed && (

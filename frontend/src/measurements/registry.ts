@@ -11,7 +11,7 @@ import type { MeasurementDefinition } from './types'
  * explicitly and any open question is listed under `ambiguities`.
  */
 
-export const MEASUREMENT_REGISTRY_VERSION = '1.4.0'
+export const MEASUREMENT_REGISTRY_VERSION = '2.1.0'
 
 export const IMAGE_PLANE_WARNING =
   'Image-plane distances are NOT body-surface lengths or circumferences. ' +
@@ -26,8 +26,8 @@ export const bust: MeasurementDefinition = {
   endPoint: '',
   path: 'circumference',
   pathNote: 'Tape level front and back.',
-  captureViews: ['front', 'side'],
-  visibility: 'Bust-line level visible from the front; side view confirms the tape stays level at the back.',
+  captureViews: ['front', 'back'],
+  visibility: 'The six annotated bust-loop keypoints are visible across front and back views.',
   tapeInstructions:
     'Measure around the fullest part of the bust, keeping the tape level front and back. ' +
     'Stand at the side of the person to ensure the tape does not slip down at the back.',
@@ -62,7 +62,7 @@ export const underbust: MeasurementDefinition = {
   endPoint: '',
   path: 'circumference',
   captureViews: ['front', 'side'],
-  visibility: 'Underbust level visible from the front; side view confirms the tape is level.',
+  visibility: 'The current underbust_left/right annotations are bust-radius endpoints, not a circumference loop. Underbust circumference remains manual until a future loop is defined.',
   tapeInstructions: 'Measure around the rib cage directly under the bust.',
   sources: [
     {
@@ -90,7 +90,7 @@ export const bustPoint: MeasurementDefinition = {
   endPoint: 'Fullest point of the bust',
   path: 'surface',
   pathNote: 'Follows the body contour; not a vertical drop.',
-  captureViews: ['front'],
+  captureViews: ['front', 'side'],
   visibility: 'Side neck point and the fullest point of the bust visible from the front.',
   tapeInstructions:
     'Measure with the tape from the side neck point to the fullest point of the bust.',
@@ -199,7 +199,7 @@ export const waist: MeasurementDefinition = {
   startPoint: 'Natural waistline (hollow of the back, below the rib cage, above the hip bone)',
   endPoint: '',
   path: 'circumference',
-  captureViews: ['front', 'side', 'back'],
+  captureViews: ['front', 'back'],
   visibility: 'Natural waistline visible; the high-contrast waist cord marks this level across views.',
   tapeInstructions: 'Measure around the natural waistline identified at the small of the back.',
   sources: [
@@ -220,6 +220,29 @@ export const waist: MeasurementDefinition = {
     costudioCode: 'w-waistline',
     patternCadNames: ['waist', 'natural waist'],
     patternCadLandmark: 'waist',
+  },
+  ambiguities: [],
+}
+
+export const hip: MeasurementDefinition = {
+  key: 'hip',
+  displayName: 'Hip',
+  scope: 'core',
+  category: 'Circumference',
+  startPoint: 'Fullest hip/seat level',
+  endPoint: '',
+  path: 'circumference',
+  pathNote: 'Level loop through the annotated side, centre-front and centre-back hip points.',
+  captureViews: ['front', 'back'],
+  visibility: 'hip_side_left/right, hip_center_front and hip_center_back visible in their assigned views.',
+  tapeInstructions: 'Measure level around the fullest part of the hips and seat without compressing the body.',
+  sources: [{ document: 'Garment Fitting Body Landmarks COCO v6', quote: 'hip_center_front, hip_center_back, hip_side_right, hip_side_left' }],
+  ownerCorrections: [],
+  mapping: {
+    costudioKey: 'hip',
+    costudioCode: 'w-hip-circ',
+    patternCadNames: ['hip', 'full hip', 'seat'],
+    patternCadLandmark: 'hip',
   },
   ambiguities: [],
 }
@@ -519,6 +542,7 @@ export const MEASUREMENT_REGISTRY: readonly MeasurementDefinition[] = [
   bustSpan,
   bustRadius,
   waist,
+  hip,
   frontShoulder,
   backShoulder,
   acrossChest,

@@ -65,13 +65,19 @@ Endpoints:
 - `POST /api/turn-video` — authenticated multipart form: `consent` + `file` (video). Duration,
   sampled exposure/blur and pose-orientation turn coverage (VF-2).
 - `POST /api/measurement-estimates` — authenticated multipart form: `consent`, `height_mm`,
-  `front`, `side`, and `back`. Returns the 12 VF-3 body-measurement candidates, confidence,
-  uncertainty, raw training features, provenance, and a targeted review action.
+  `front`, `side`, and `back`. Runs the tailoring-keypoint workflow, executes each published
+  ordered path, and returns segment evidence, confidence, blocked paths, and a targeted review
+  action. With `session_id`, it reuses stored keypoints and persists candidates into the linked
+  measurement table. It does not use silhouette labels as measurement points.
 - `GET  /api/decisions` — Neon-backed capture analyses (admin only).
 - `GET  /api/measurements/definitions` — versioned backend measurement registry.
 - `POST /api/measurement-tables` — create a pending measurement table for a subject.
 - `GET  /api/measurement-tables/{id}` — retrieve a table in `mm`, `cm` or `in`.
 - `PUT  /api/measurement-tables/{id}/measurements/{key}` — record an estimated or reviewed value.
+- `GET  /api/admin/measurement-paths` — list published and draft ordered keypoint paths.
+- `PUT  /api/admin/measurement-paths/{key}/draft` — create or update an admin path draft.
+- `POST /api/admin/measurement-paths/{key}/publish` — publish an immutable path version; existing
+  measurement-table rows retain their original definition version.
 
 ## Test
 
@@ -94,6 +100,10 @@ cd visionfit/service
 
 ## VF-3 calibration training
 
+VF-3 runtime geometry is the sum of calibrated segments between annotated tailoring keypoints.
+The body outline is used only to establish each view's pixel scale. Missing keypoint segments block
+a measurement; the service never falls back silently to the old ellipse approximation.
+
 The geometry estimator is intentionally separate from learned correction. Save professionally
 measured labels in CSV columns named `raw_<measurement>_mm` and `tape_<measurement>_mm`, with one
 row per consenting subject. Fit an auditable baseline profile with:
@@ -105,6 +115,15 @@ PYTHONPATH=. ./.venv/bin/python scripts/train_measurement_calibration.py labels.
 Set `VISIONFIT_MEASUREMENT_MODEL_PATH=models/vf3-calibration.json` when running the API. The API
 returns the loaded model version and its observed MAE as uncertainty. Synthetic reference images
 must not be included as accuracy labels.
+
+Validate every COCO export before training. The validator rejects source-video leakage across
+splits, fewer than 50 images, fewer than five manifested subjects, and missing subject provenance.
+Start from `../docs/subject_manifest.example.csv`; every exported source group must have exactly one row:
+
+```bash
+./.venv/bin/python scripts/validate_coco_dataset.py ../../dataset-training/export.zip \
+  --manifest ../../dataset-training/subjects.csv
+```
 
 ## AWS container
 

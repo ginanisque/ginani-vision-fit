@@ -20,7 +20,24 @@ export interface MeasurementDefinitionDto {
   calculation: string
 }
 
+export interface MeasurementPathDto {
+  id: string
+  measurementKey: string
+  displayName: string
+  version: number
+  status: 'draft' | 'published'
+  path: 'circumference' | 'straight' | 'surface'
+  closed: boolean
+  orderedPoints: string[]
+  segmentViews: Array<'front' | 'side' | 'back'>
+  requiredViews: Array<'front' | 'side' | 'back'>
+  calculationMethod: string
+  publishedAt: string | null
+}
+
 export interface MeasurementRowDto extends MeasurementDefinitionDto {
+  pathVersion: number
+  segmentViews: Array<'front' | 'side' | 'back'>
   value: number | null
   unit: 'mm' | 'cm' | 'in'
   status: 'pending' | 'estimated' | 'reviewed' | 'unavailable'
@@ -103,10 +120,11 @@ export interface MeasurementReadinessDto {
   heightMm: number | null
   availableViews: string[]
   availableLandmarks: string[]
+  availableLandmarksByView: Record<string, string[]>
   readyCount: number
   blockedCount: number
   measurements: Array<MeasurementDefinitionDto & {
-    status: 'ready_for_estimation' | 'blocked'
+    status: 'ready_for_estimation' | 'blocked' | 'manual_required'
     missingViews: string[]
     missingLandmarks: string[]
     missingCalibration: boolean
@@ -197,7 +215,16 @@ export interface CircumferenceEstimate {
   levels: { front: Record<string, number>; side: Record<string, number>; back: Record<string, number> }
   recommendedAction: string
   targetedManualCheck: { key: string; displayName: string; reason: string }
+  measurementTableId?: string
+  persistedKeys?: string[]
+  skippedKeys?: string[]
   trainingFeatures: { heightMm: number; rawMeasurementsMm: Record<string, number> }
+  blockedMeasurements?: Array<{
+    key: string
+    displayName: string
+    status: 'blocked'
+    missingSegments: Array<{ from: string; to: string; view: 'front' | 'side' | 'back' }>
+  }>
   measurements: Array<{
     key: string
     displayName: string
@@ -209,7 +236,17 @@ export interface CircumferenceEstimate {
     requiresReview: true
     sourceViews: Array<'front' | 'side' | 'back'>
     provenance: string
-    evidence: Record<string, number>
+    evidence?: Record<string, number>
+    orderedPoints?: string[]
+    segments?: Array<{
+      from: string
+      to: string
+      view: 'front' | 'side' | 'back'
+      lengthMm: number
+      confidence: number
+    }>
+    pathVersion?: number
+    pathVersionId?: string
   }>
 }
 

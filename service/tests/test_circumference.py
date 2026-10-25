@@ -30,10 +30,10 @@ def test_straight_width_is_direction_independent_and_ignores_detached_arms():
     assert left_to_right == right_to_left == 41
 
 
-def test_vf3_covers_the_twelve_core_registry_measurements():
-    assert len(CORE_KEYS) == 12
+def test_vf3_covers_the_thirteen_core_registry_measurements():
+    assert len(CORE_KEYS) == 13
     assert set(CORE_KEYS) == {
-        "bust", "underbust", "bust_point", "bust_span", "bust_radius", "waist",
+        "bust", "underbust", "bust_point", "bust_span", "bust_radius", "waist", "hip",
         "front_shoulder", "back_shoulder", "across_chest", "across_back",
         "nape_to_waist", "full_front_length",
     }

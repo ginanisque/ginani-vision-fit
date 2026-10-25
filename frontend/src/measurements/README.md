@@ -17,7 +17,11 @@ domain sources in `references/` and Eunice's corrections (which take precedence)
 
 ## Version
 
-`MEASUREMENT_REGISTRY_VERSION = "1.4.0"` (semver). Bump the version on any semantic change.
+`MEASUREMENT_REGISTRY_VERSION = "2.1.0"` (semver). Version 2.1 executes published ordered
+COCO keypoint paths; bump the version on any semantic change.
+
+The core registry contains 13 measurements, including the front/back hip circumference loop.
+Underbust remains a manual core row until its own complete loop is annotated.
 
 ## Schema
 

@@ -6,11 +6,13 @@ a value later, but it must also state its method, source views and confidence.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from psycopg.types.json import Jsonb
 
 from .auth import SessionUser, require_admin
 from .database import connection
@@ -19,7 +21,7 @@ Unit = Literal["mm", "cm", "in"]
 View = Literal["front", "side", "back"]
 Status = Literal["pending", "estimated", "reviewed", "unavailable"]
 
-REGISTRY_VERSION = "1.4.0"
+REGISTRY_VERSION = "2.1.0"
 BODY_MEASUREMENT_POLICY = (
     "Exact body measurement — no garment ease or seam allowance. "
     "Ease is controlled in Pattern CAD."
@@ -45,19 +47,20 @@ class MeasurementDefinition:
 
 
 DEFINITIONS = (
-    MeasurementDefinition("bust", "Bust", "core", "Circumference", "circumference", ("front", "side"), ("bust_level", "front_silhouette", "side_silhouette"), "calibrated_cross_section", ("bust", "full bust"), "bust"),
-    MeasurementDefinition("underbust", "Underbust", "core", "Circumference", "circumference", ("front", "side"), ("underbust_level", "front_silhouette", "side_silhouette"), "calibrated_cross_section", ("under bust", "underbust"), "underBust"),
-    MeasurementDefinition("bust_point", "Bust point length", "core", "Bust control", "surface", ("front",), ("side_neck_point", "bust_apex"), "surface_path", ("bust point", "bust point length"), None),
-    MeasurementDefinition("bust_span", "Bust span", "core", "Bust control", "straight", ("front",), ("left_bust_apex", "right_bust_apex"), "calibrated_point_distance", ("bust span",), None),
-    MeasurementDefinition("bust_radius", "Bust radius", "core", "Bust control", "straight", ("front", "side"), ("bust_apex", "underbust_point"), "calibrated_point_distance", ("bust radius",), None),
-    MeasurementDefinition("waist", "Waist", "core", "Circumference", "circumference", ("front", "side", "back"), ("waist_cord", "front_silhouette", "side_silhouette"), "calibrated_cross_section", ("waist", "natural waist"), "waist"),
-    MeasurementDefinition("front_shoulder", "Front shoulder", "core", "Upper body width", "straight", ("front",), ("left_shoulder", "right_shoulder"), "calibrated_point_distance", ("front shoulder", "shoulder width", "across shoulder"), "shoulder"),
-    MeasurementDefinition("back_shoulder", "Back shoulder", "core", "Upper body width", "surface", ("back",), ("left_shoulder", "right_shoulder", "back_surface"), "surface_path", ("back shoulder",), "shoulder"),
-    MeasurementDefinition("across_chest", "Across chest", "core", "Upper body width", "surface", ("front",), ("left_shoulder", "right_shoulder", "front_silhouette"), "surface_path", ("across chest", "chest width"), "acrossChest"),
-    MeasurementDefinition("across_back", "Across back", "core", "Upper body width", "surface", ("back",), ("left_shoulder", "right_shoulder", "back_silhouette"), "surface_path", ("across back",), None),
-    MeasurementDefinition("nape_to_waist", "Nape to waist", "core", "Vertical length", "straight", ("back",), ("nape", "waist_cord"), "calibrated_point_distance", ("nape to waist", "back length"), "napeToWaist"),
-    MeasurementDefinition("full_front_length", "Full front length", "core", "Vertical length", "surface", ("front", "side"), ("side_neck_point", "chest_contour", "waist_cord"), "surface_path", ("full front length",), None),
-    MeasurementDefinition("side_waist_to_knee", "Side waist to knee", "future", "Lower body length", "surface", ("side",), ("side_waist", "knee_level", "side_surface"), "surface_path", ("side waist to knee", "waist to knee"), "sideWaistToKnee"),
+    MeasurementDefinition("bust", "Bust", "core", "Circumference", "circumference", ("front", "back"), ("bust_level_left_side", "bust_point_left", "bust_level_center_front", "bust_point_right", "bust_level_right_side", "bust_level_center_back"), "ordered_keypoint_path", ("bust", "full bust"), "bust"),
+    MeasurementDefinition("underbust", "Underbust", "core", "Circumference", "circumference", ("front", "side"), ("underbust_left", "underbust_right"), "manual_or_future_circumference", ("under bust", "underbust"), "underBust"),
+    MeasurementDefinition("bust_point", "Bust point length", "core", "Bust control", "surface", ("front", "side"), ("side_neck_left", "bust_point_left"), "ordered_keypoint_path", ("bust point", "bust point length"), None),
+    MeasurementDefinition("bust_span", "Bust span", "core", "Bust control", "straight", ("front",), ("bust_point_left", "bust_point_right"), "ordered_keypoint_path", ("bust span",), None),
+    MeasurementDefinition("bust_radius", "Bust radius", "core", "Bust control", "straight", ("front", "side"), ("bust_point_left", "underbust_left"), "ordered_keypoint_path", ("bust radius",), None),
+    MeasurementDefinition("waist", "Waist", "core", "Circumference", "circumference", ("front", "back"), ("waist_left_side", "waist_center_front", "waist_right_side", "waist_center_back"), "ordered_keypoint_path", ("waist", "natural waist"), "waist"),
+    MeasurementDefinition("hip", "Hip", "core", "Circumference", "circumference", ("front", "back"), ("hip_side_left", "hip_center_front", "hip_side_right", "hip_center_back"), "ordered_keypoint_path", ("hip", "full hip", "seat"), "hip"),
+    MeasurementDefinition("front_shoulder", "Front shoulder", "core", "Upper body width", "straight", ("front",), ("shoulder_point_left", "shoulder_point_right"), "ordered_keypoint_path", ("front shoulder", "shoulder width", "across shoulder"), "shoulder"),
+    MeasurementDefinition("back_shoulder", "Back shoulder", "core", "Upper body width", "surface", ("back",), ("shoulder_point_left", "shoulder_point_right"), "ordered_keypoint_path", ("back shoulder",), "shoulder"),
+    MeasurementDefinition("across_chest", "Across chest", "core", "Upper body width", "surface", ("front",), ("across_chest_left", "across_chest_right"), "ordered_keypoint_path", ("across chest", "chest width"), "acrossChest"),
+    MeasurementDefinition("across_back", "Across back", "core", "Upper body width", "surface", ("back",), ("across_back_left", "across_back_right"), "ordered_keypoint_path", ("across back",), None),
+    MeasurementDefinition("nape_to_waist", "Nape to waist", "core", "Vertical length", "straight", ("back",), ("nape", "waist_center_back"), "ordered_keypoint_path", ("nape to waist", "back length"), "napeToWaist"),
+    MeasurementDefinition("full_front_length", "Full front length", "core", "Vertical length", "surface", ("front", "side"), ("side_neck_left", "bust_point_left", "waist_below_bust_left"), "ordered_keypoint_path", ("full front length",), None),
+    MeasurementDefinition("side_waist_to_knee", "Side waist to knee", "future", "Lower body length", "surface", ("side",), ("waist_right_side", "knee_right"), "ordered_keypoint_path", ("side waist to knee", "waist to knee"), "sideWaistToKnee"),
 )
 DEFINITION_BY_KEY = {definition.key: definition for definition in DEFINITIONS}
 
@@ -87,7 +90,143 @@ class MeasurementValueRequest(BaseModel):
     notes: str = Field(default="", max_length=1000)
 
 
+class MeasurementPathRequest(BaseModel):
+    path: Literal["circumference", "straight", "surface"]
+    closed: bool = False
+    ordered_points: list[str] = Field(min_length=2, max_length=30)
+    segment_views: list[View] = Field(min_length=1, max_length=30)
+    required_views: list[View] = Field(min_length=1, max_length=3)
+    calculation_method: str = Field(min_length=1, max_length=200)
+
+
+def validate_measurement_path(request: MeasurementPathRequest) -> None:
+    points = request.ordered_points
+    if any(not re.fullmatch(r"[a-z][a-z0-9_]{1,79}", point) for point in points):
+        raise HTTPException(422, "Point keys must use lowercase snake_case")
+    if len(set(points)) != len(points):
+        raise HTTPException(422, "Each point belongs in the sequence once; closed paths close automatically")
+    if request.path == "straight" and len(points) != 2:
+        raise HTTPException(422, "Straight measurements require exactly two ordered points")
+    if request.path == "circumference" and (not request.closed or len(points) < 3):
+        raise HTTPException(422, "Circumference measurements require a closed path with at least three points")
+    if request.path != "circumference" and request.closed:
+        raise HTTPException(422, "Only circumference measurements may be closed")
+    expected_segments = len(points) - 1 + int(request.closed)
+    if len(request.segment_views) != expected_segments:
+        raise HTTPException(422, f"Path requires exactly {expected_segments} segment views")
+    unexpected_segment_views = sorted(set(request.segment_views) - set(request.required_views))
+    if unexpected_segment_views:
+        raise HTTPException(422, "Every segment view must also be selected as a required view")
+
+
 router = APIRouter(prefix="/api", tags=["measurements"])
+
+
+def _path_json(row: dict) -> dict:
+    return {
+        "id": str(row["id"]), "measurementKey": row["measurement_key"],
+        "displayName": row["display_name"], "version": row["version"],
+        "status": row["status"], "path": row["path"], "closed": row["closed"],
+        "orderedPoints": row["ordered_points"], "segmentViews": row["segment_views"],
+        "requiredViews": row["required_views"],
+        "calculationMethod": row["calculation_method"],
+        "publishedAt": row["published_at"].isoformat() if row["published_at"] else None,
+    }
+
+
+def published_measurement_paths() -> list[dict]:
+    """Load the immutable path versions used by the runtime estimator."""
+    with connection() as conn:
+        rows = conn.execute(
+            """select v.id, v.measurement_key, d.display_name, v.version, v.status::text,
+                      v.path::text, v.closed, v.ordered_points, v.segment_views,
+                      v.required_views::text[],
+                      v.calculation_method, v.published_at
+                 from measurement_definition_versions v
+                 join measurement_definitions d on d.key = v.measurement_key
+                where v.status = 'published' and v.calculation_method = 'ordered_keypoint_path'
+                  and d.active order by d.created_at, v.measurement_key"""
+        ).fetchall()
+    return [_path_json(row) for row in rows]
+
+
+@router.get("/admin/measurement-paths")
+async def list_measurement_paths(_admin: SessionUser = Depends(require_admin)) -> dict:
+    with connection() as conn:
+        rows = conn.execute(
+            """select v.id, v.measurement_key, d.display_name, v.version, v.status::text,
+                      v.path::text, v.closed, v.ordered_points, v.segment_views,
+                      v.required_views::text[],
+                      v.calculation_method, v.published_at
+                 from measurement_definition_versions v
+                 join measurement_definitions d on d.key = v.measurement_key
+                where v.status in ('draft', 'published')
+                order by d.created_at, v.measurement_key, v.status"""
+        ).fetchall()
+    return {"paths": [_path_json(row) for row in rows]}
+
+
+@router.put("/admin/measurement-paths/{key}/draft")
+async def save_measurement_path_draft(
+    key: str, request: MeasurementPathRequest, admin: SessionUser = Depends(require_admin),
+) -> dict:
+    validate_measurement_path(request)
+    views = list(dict.fromkeys(request.required_views))
+    with connection() as conn:
+        definition = conn.execute("select display_name from measurement_definitions where key = %s", (key,)).fetchone()
+        if definition is None:
+            raise HTTPException(404, "Unknown measurement key")
+        row = conn.execute(
+            """insert into measurement_definition_versions
+                    (measurement_key, version, status, path, closed, ordered_points,
+                     segment_views, required_views, calculation_method, created_by)
+                 values (%s, coalesce((select max(version) + 1 from measurement_definition_versions
+                                        where measurement_key = %s), 1),
+                         'draft', %s, %s, %s, %s, %s::capture_view[], %s, %s)
+                 on conflict (measurement_key) where status = 'draft' do update set
+                    path = excluded.path, closed = excluded.closed, ordered_points = excluded.ordered_points,
+                    segment_views = excluded.segment_views,
+                    required_views = excluded.required_views, calculation_method = excluded.calculation_method
+                 returning id, measurement_key, version, status::text, path::text, closed,
+                           ordered_points, segment_views, required_views::text[], calculation_method, published_at""",
+            (key, key, request.path, request.closed, Jsonb(request.ordered_points),
+             Jsonb(request.segment_views), views,
+             request.calculation_method, admin.id),
+        ).fetchone()
+    row["display_name"] = definition["display_name"]
+    return _path_json(row)
+
+
+@router.post("/admin/measurement-paths/{key}/publish")
+async def publish_measurement_path(key: str, admin: SessionUser = Depends(require_admin)) -> dict:
+    with connection() as conn:
+        draft = conn.execute(
+            "select id from measurement_definition_versions where measurement_key = %s and status = 'draft' for update",
+            (key,),
+        ).fetchone()
+        if draft is None:
+            raise HTTPException(404, "Save a draft before publishing")
+        definition = conn.execute("select display_name from measurement_definitions where key = %s", (key,)).fetchone()
+        conn.execute("update measurement_definition_versions set status = 'archived' where measurement_key = %s and status = 'published'", (key,))
+        row = conn.execute(
+            """update measurement_definition_versions set status = 'published', published_by = %s, published_at = now()
+                where id = %s returning id, measurement_key, version, status::text, path::text, closed,
+                ordered_points, segment_views, required_views::text[], calculation_method, published_at""",
+            (admin.id, draft["id"]),
+        ).fetchone()
+        conn.execute(
+            """update measurement_definitions d set path = v.path, required_views = v.required_views,
+                    required_landmarks = array(select jsonb_array_elements_text(v.ordered_points)),
+                    calculation_method = v.calculation_method
+                 from measurement_definition_versions v where v.id = %s and d.key = v.measurement_key""",
+            (draft["id"],),
+        )
+        conn.execute(
+            "insert into audit_events (actor_id, entity_type, entity_id, action, after_data) values (%s, 'measurement_definition_version', %s, 'publish', %s)",
+            (admin.id, str(draft["id"]), Jsonb({"measurementKey": key, "version": row["version"]})),
+        )
+    row["display_name"] = definition["display_name"]
+    return _path_json(row)
 
 
 def _definition_json(definition: MeasurementDefinition) -> dict:
@@ -118,13 +257,16 @@ def _load_table(table_id: str, unit: Unit) -> dict | None:
         if table is None:
             return None
         rows = conn.execute(
-            """select d.key, d.display_name, d.scope, d.category, d.path::text,
-                      d.required_views::text[], d.required_landmarks, d.calculation_method,
+            """select d.key, d.display_name, d.scope, d.category,
+                      version.version path_version, version.path::text,
+                      version.required_views::text[], version.ordered_points required_landmarks,
+                      version.segment_views, version.calculation_method,
                       d.pattern_cad_names, d.pattern_cad_landmark,
                       v.value_mm, v.status::text, v.method, v.source_views::text[],
                       v.confidence, v.notes
                  from measurement_values v
                  join measurement_definitions d on d.key = v.measurement_key
+                 join measurement_definition_versions version on version.id = v.definition_version_id
                 where v.table_id = %s
                 order by d.created_at, d.key""",
             (table_id,),
@@ -142,6 +284,7 @@ def _load_table(table_id: str, unit: Unit) -> dict | None:
                 "key": row["key"], "displayName": row["display_name"], "scope": row["scope"],
                 "category": row["category"], "path": row["path"],
                 "requiredViews": row["required_views"], "requiredLandmarks": row["required_landmarks"],
+                "segmentViews": row["segment_views"], "pathVersion": row["path_version"],
                 "calculation": row["calculation_method"], "patternCadNames": row["pattern_cad_names"],
                 "patternCadLandmark": row["pattern_cad_landmark"],
                 "value": None if row["value_mm"] is None else _from_mm(float(row["value_mm"]), unit),
@@ -211,16 +354,24 @@ async def set_measurement_value(
     unit: Unit = Query("cm"),
     admin: SessionUser = Depends(require_admin),
 ) -> dict:
-    definition = DEFINITION_BY_KEY.get(key)
-    if definition is None:
+    if key not in DEFINITION_BY_KEY:
         raise HTTPException(404, "Unknown measurement key")
-    unexpected_views = sorted(set(request.source_views) - set(definition.required_views))
-    if unexpected_views:
-        raise HTTPException(422, f"Views not declared for {key}: {', '.join(unexpected_views)}")
     if request.status == "estimated" and request.confidence is None:
         raise HTTPException(422, "Estimated measurements require confidence")
     reviewed = request.status == "reviewed"
     with connection() as conn:
+        pinned = conn.execute(
+            """select version.required_views::text[] required_views
+                 from measurement_values value
+                 join measurement_definition_versions version on version.id = value.definition_version_id
+                where value.table_id = %s and value.measurement_key = %s""",
+            (table_id, key),
+        ).fetchone()
+        if pinned is None:
+            raise HTTPException(404, "Measurement table or measurement row not found")
+        unexpected_views = sorted(set(request.source_views) - set(pinned["required_views"]))
+        if unexpected_views:
+            raise HTTPException(422, f"Views not declared by this table's {key} version: {', '.join(unexpected_views)}")
         updated = conn.execute(
             """update measurement_values
                   set value_mm = %s, status = %s, method = %s, source_views = %s::capture_view[],
@@ -234,6 +385,55 @@ async def set_measurement_value(
         if updated is None:
             raise HTTPException(404, "Measurement table not found")
     return _load_table(table_id, unit)
+
+
+def persist_runtime_estimates(
+    *, user: SessionUser, session_id: str, estimates: list[dict], model_version: str,
+) -> dict:
+    """Link review-only estimates to the customer's capture and pinned path versions."""
+    with connection() as conn:
+        capture = conn.execute(
+            "select id, customer_id from capture_sessions where id::text = %s and customer_id = %s",
+            (session_id, user.id),
+        ).fetchone()
+        if capture is None:
+            raise PermissionError("Capture session not found for this customer")
+        table = conn.execute(
+            """select id from measurement_tables
+                where capture_session_id = %s and customer_id = %s
+                order by created_at desc limit 1""",
+            (capture["id"], user.id),
+        ).fetchone()
+        if table is None:
+            table = conn.execute(
+                """insert into measurement_tables
+                        (customer_id, capture_session_id, registry_version, preferred_unit, created_by)
+                     values (%s, %s, %s, 'cm', %s) returning id""",
+                (user.id, capture["id"], REGISTRY_VERSION, user.id),
+            ).fetchone()
+        persisted: list[str] = []
+        skipped: list[str] = []
+        for estimate in estimates:
+            updated = conn.execute(
+                """update measurement_values
+                      set value_mm = %s, status = 'estimated', method = 'ordered_keypoint_path',
+                          source_views = %s::capture_view[], confidence = %s,
+                          notes = %s, reviewed_by = null, reviewed_at = null
+                    where table_id = %s and measurement_key = %s
+                      and definition_version_id = %s and status <> 'reviewed'
+                    returning id""",
+                (estimate["valueMm"], estimate["sourceViews"], estimate["confidence"],
+                 f"Calibration model {model_version}; review required", table["id"],
+                 estimate["key"], estimate["pathVersionId"]),
+            ).fetchone()
+            (persisted if updated else skipped).append(estimate["key"])
+        conn.execute(
+            """insert into audit_events (actor_id, entity_type, entity_id, action, after_data)
+                 values (%s, 'measurement_table', %s, 'runtime_estimates', %s)""",
+            (user.id, str(table["id"]), Jsonb({"persisted": persisted, "skipped": skipped,
+                                               "modelVersion": model_version})),
+        )
+    return {"measurementTableId": str(table["id"]), "persistedKeys": persisted, "skippedKeys": skipped}
 
 
 @router.get("/admin/customers")
@@ -267,34 +467,58 @@ async def measurement_analysis(session_id: str, _admin: SessionUser = Depends(re
             "select distinct view::text view from capture_assets where session_id = %s", (session_id,),
         ).fetchall()
         landmark_rows = conn.execute(
-            """select distinct dl.landmark_key from detected_landmarks dl
-                 join analysis_runs ar on ar.id = dl.analysis_run_id where ar.session_id = %s""",
+            """select distinct asset.view::text view, dl.landmark_key from detected_landmarks dl
+                 join analysis_runs ar on ar.id = dl.analysis_run_id
+                 join capture_assets asset on asset.id = dl.asset_id
+                where ar.session_id = %s""",
             (session_id,),
         ).fetchall()
     available_views = {row["view"] for row in view_rows}
     available_landmarks = {row["landmark_key"] for row in landmark_rows}
-    pose_basis = {"left_shoulder", "right_shoulder", "left_hip", "right_hip"}
-    geometry_ready = pose_basis.issubset(available_landmarks)
+    landmarks_by_view = {
+        view: {row["landmark_key"] for row in landmark_rows if row["view"] == view}
+        for view in available_views
+    }
+    runtime_paths = {path["measurementKey"]: path for path in published_measurement_paths()}
     analyses = []
     for definition in DEFINITIONS:
-        missing_views = sorted(set(definition.required_views) - available_views)
-        # VF-3 derives bust/underbust/waist levels, silhouettes, nape and bust
-        # control points from the calibrated pose basis. They are provenance
-        # labels in the registry, not all native MediaPipe landmark names.
-        missing_landmarks = [] if geometry_ready else sorted(pose_basis - available_landmarks)
+        definition_data = _definition_json(definition)
+        runtime = runtime_paths.get(definition.key)
+        required_views = runtime["requiredViews"] if runtime else definition_data["requiredViews"]
+        required_points = runtime["orderedPoints"] if runtime else definition_data["requiredLandmarks"]
+        calculation = runtime["calculationMethod"] if runtime else definition.calculation
+        missing_views = sorted(set(required_views) - available_views)
+        if runtime:
+            pairs = list(zip(required_points, required_points[1:]))
+            if runtime["closed"]:
+                pairs.append((required_points[-1], required_points[0]))
+            missing_landmarks = sorted({
+                f"{view}:{point}"
+                for (start, end), view in zip(pairs, runtime["segmentViews"])
+                for point in (start, end)
+                if point not in landmarks_by_view.get(view, set())
+            })
+        elif calculation == "manual_only":
+            missing_landmarks = []
+        else:
+            missing_landmarks = sorted(set(required_points) - available_landmarks)
         missing_calibration = session["height_mm"] is None
-        status = "ready_for_estimation" if not missing_views and not missing_landmarks and not missing_calibration else "blocked"
+        manual_required = calculation == "manual_only"
+        status = ("manual_required" if manual_required else "ready_for_estimation"
+                  if not missing_views and not missing_landmarks and not missing_calibration else "blocked")
         analyses.append({
-            **_definition_json(definition), "status": status,
+            **definition_data, "requiredViews": required_views, "requiredLandmarks": required_points,
+            "calculation": calculation, "status": status,
             "missingViews": missing_views, "missingLandmarks": missing_landmarks,
             "missingCalibration": missing_calibration,
-            "message": "Required evidence is available; compute an estimate and send it for review."
-                if status == "ready_for_estimation" else "Capture or landmark evidence is incomplete.",
+            "message": "Enter a professional tape measurement; no automated path is published."
+                if manual_required else "Required evidence is available; compute an estimate and send it for review."
+                if status == "ready_for_estimation" else "Capture or view-specific landmark evidence is incomplete.",
         })
     return {
         "sessionId": session_id, "heightMm": float(session["height_mm"]) if session["height_mm"] else None,
         "availableViews": sorted(available_views), "availableLandmarks": sorted(available_landmarks),
-        "derivedLandmarksAvailable": geometry_ready,
+        "availableLandmarksByView": {view: sorted(points) for view, points in landmarks_by_view.items()},
         "readyCount": sum(item["status"] == "ready_for_estimation" for item in analyses),
         "blockedCount": sum(item["status"] == "blocked" for item in analyses),
         "measurements": analyses,
