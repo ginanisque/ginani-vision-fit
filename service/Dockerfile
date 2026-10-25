@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libportaudio2 \
+    && apt-get install -y --no-install-recommends libegl1 libgles2 libportaudio2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./requirements.txt
