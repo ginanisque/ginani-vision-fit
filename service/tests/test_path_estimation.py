@@ -1,6 +1,34 @@
+import cv2
+import numpy as np
 import pytest
 
-from app.path_estimation import calculate_ordered_path, normalize_keypoints
+from app.path_estimation import calculate_ordered_path, normalize_keypoints, reference_scale_mm_per_pixel
+
+
+@pytest.mark.parametrize(("kind", "width", "height"), [("a4", 210, 297), ("letter", 216, 279)])
+def test_detects_paper_reference_scale(kind, width, height):
+    image = np.zeros((600, 800, 3), np.uint8)
+    cv2.rectangle(image, (100, 100), (100 + width, 100 + height), (255, 255, 255), -1)
+    scale, evidence = reference_scale_mm_per_pixel(image, kind)
+    assert scale == pytest.approx(1, abs=.03)
+    assert evidence["kind"] == kind
+    assert len(evidence["corners"]) == 4
+
+
+def test_detects_ruler_from_outline_without_reading_marks():
+    image = np.zeros((600, 800, 3), np.uint8)
+    cv2.rectangle(image, (100, 200), (710, 250), (255, 255, 255), -1)
+    scale, evidence = reference_scale_mm_per_pixel(image, "ruler_12in")
+    assert scale == pytest.approx(.5, abs=.02)
+    assert evidence["kind"] == "ruler_12in"
+
+
+def test_rejects_unknown_or_missing_reference():
+    image = np.zeros((600, 800, 3), np.uint8)
+    with pytest.raises(ValueError, match="must be"):
+        reference_scale_mm_per_pixel(image, "credit_card")
+    with pytest.raises(ValueError, match="not detected"):
+        reference_scale_mm_per_pixel(image, "a4")
 
 
 def test_normalizes_nested_roboflow_keypoints():

@@ -43,12 +43,13 @@ const png = () => new File(['fake'], 'image.png', { type: 'image/png' })
 
 async function reachReview(user: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
   await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
-  await user.click(screen.getByRole('button', { name: 'Capture' }))
+  await user.click(screen.getByRole('button', { name: /start visionfit/i }))
   await user.click(screen.getByLabelText(/consent to my body photos/i))
   await user.click(screen.getByLabelText(/understand why captures/i))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   await user.type(screen.getByLabelText(/height/i), '165')
+  await user.click(screen.getByRole('button', { name: /continue/i }))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   const frontInput = container.querySelector('input[type="file"]') as HTMLInputElement
@@ -80,7 +81,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
-    await user.click(screen.getByRole('button', { name: 'Capture' }))
+    await user.click(screen.getByRole('button', { name: /start visionfit/i }))
 
     const continueBtn = screen.getByRole('button', { name: /continue/i })
     expect(continueBtn).toBeDisabled()
@@ -93,11 +94,10 @@ describe('App', () => {
   })
 
   it('requests recapture when an image fails quality', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(okResponse(makeDecision('front', 'recapture')))
-      .mockResolvedValueOnce(okResponse(makeDecision('side', 'proceed')))
-      .mockResolvedValueOnce(okResponse(makeDecision('back', 'proceed')))
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse({
+      captureSessionId: 'session-1',
+      results: [makeDecision('front', 'recapture'), makeDecision('side', 'proceed'), makeDecision('back', 'proceed')],
+    }))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
@@ -112,11 +112,12 @@ describe('App', () => {
   })
 
   it('allows progression when all three images pass', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(okResponse(makeDecision('front', 'proceed')))
-      .mockResolvedValueOnce(okResponse(makeDecision('side', 'proceed')))
-      .mockResolvedValueOnce(okResponse(makeDecision('back', 'proceed')))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(okResponse({
+        captureSessionId: 'session-1',
+        results: [makeDecision('front', 'proceed'), makeDecision('side', 'proceed'), makeDecision('back', 'proceed')],
+      }))
+      .mockRejectedValueOnce(new TypeError('estimate unavailable'))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
@@ -133,7 +134,10 @@ describe('App', () => {
     result.reasons = ['Confirm cord placement.']
     result.evidence = [{ kind: 'cord-candidate', label: 'Possible cord', box: { x: 20, y: 100, width: 200, height: 5 } }]
     result.captureChecks = { posture: { status: 'unknown', method: 'human review required' } }
-    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-review', view: 'side' })).mockResolvedValueOnce(okResponse({ ...result, id: 'back-review', view: 'back' }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse({
+      captureSessionId: 'session-1',
+      results: [result, { ...result, id: 'side-review', view: 'side' }, { ...result, id: 'back-review', view: 'back' }],
+    })).mockRejectedValueOnce(new TypeError('estimate unavailable'))
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
     const { container } = render(<App />)
@@ -142,7 +146,7 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: /review needed/i })).toBeInTheDocument()
     expect(screen.queryByText(/image quality is acceptable/i)).not.toBeInTheDocument()
     expect(screen.getByLabelText('front detected evidence').querySelector('rect')).toHaveAttribute('y', '100')
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/capture')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/captures')
     expect((fetchMock.mock.calls[0][1].body as FormData).get('consent')).toBe('true')
     await user.click(screen.getByRole('button', { name: /retake front/i }))
     expect(screen.getByRole('heading', { name: 'Front photo' })).toBeInTheDocument()
@@ -153,7 +157,10 @@ describe('App', () => {
     result.reasons = ['Confirm posture.']
     result.evidence = [{ kind: 'pose-landmark', label: 'pose landmark: nose', box: { x: 50, y: 30, width: 2, height: 2 } }]
     result.captureChecks = { posture: { status: 'pass', method: 'MediaPipe Pose landmarks (33-point, provisional)', orientation: 'front', headToFeet: 'pass', postureQuality: 'pass', orientationMethod: 'shoulder/hip landmark geometry' } }
-    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse(result)).mockResolvedValueOnce(okResponse({ ...result, id: 'side-p', view: 'side' })).mockResolvedValueOnce(okResponse({ ...result, id: 'back-p', view: 'back' }))
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse({
+      captureSessionId: 'session-1',
+      results: [result, { ...result, id: 'side-p', view: 'side' }, { ...result, id: 'back-p', view: 'back' }],
+    })).mockRejectedValueOnce(new TypeError('estimate unavailable'))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()

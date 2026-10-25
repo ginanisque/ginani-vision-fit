@@ -20,6 +20,72 @@ class TailoringPoint:
 
 
 POINT_NAME_FIELDS = ("class_name", "keypoint_class_name", "name", "label", "key")
+CALIBRATION_REFERENCES = {
+    "a4": (210.0, 297.0),
+    "letter": (215.9, 279.4),
+    "ruler_12in": (None, 304.8),
+}
+
+
+def reference_scale_mm_per_pixel(image: np.ndarray, kind: str) -> tuple[float, dict]:
+    """Detect a high-contrast rectangular reference and return its physical scale.
+
+    Paper candidates must match their known aspect ratio. A 12-inch ruler only
+    uses the long edge because ruler widths and printed markings are not standard.
+    """
+    dimensions = CALIBRATION_REFERENCES.get(kind)
+    if dimensions is None:
+        raise ValueError("Calibration reference must be A4, Letter, or a 1-foot ruler")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 45, 135)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    image_area = float(image.shape[0] * image.shape[1])
+    candidates: list[tuple[float, float, float, np.ndarray]] = []
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if not image_area * .003 <= area <= image_area * .35:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        polygon = cv2.approxPolyDP(contour, .025 * perimeter, True)
+        if len(polygon) != 4 or not cv2.isContourConvex(polygon):
+            continue
+        rectangle = cv2.minAreaRect(contour)
+        side_a, side_b = rectangle[1]
+        short_px, long_px = sorted((float(side_a), float(side_b)))
+        if short_px < 12 or long_px < 50:
+            continue
+        rectangularity = area / (short_px * long_px)
+        if rectangularity < .78:
+            continue
+        ratio = long_px / short_px
+        if kind == "ruler_12in":
+            if ratio < 4.0:
+                continue
+            ratio_score = min(ratio / 8.0, 1.0)
+        else:
+            width_mm, height_mm = dimensions
+            expected = max(width_mm, height_mm) / min(width_mm, height_mm)  # type: ignore[arg-type]
+            ratio_error = abs(ratio - expected) / expected
+            if ratio_error > .12:
+                continue
+            ratio_score = 1.0 - ratio_error
+        candidates.append((area * rectangularity * ratio_score, short_px, long_px, polygon))
+    if not candidates:
+        raise ValueError("Calibration reference was not detected with credible rectangular geometry")
+    _, short_px, long_px, polygon = max(candidates, key=lambda item: item[0])
+    width_mm, height_mm = dimensions
+    if kind == "ruler_12in":
+        scale = float(height_mm) / long_px
+    else:
+        short_mm, long_mm = sorted((float(width_mm), float(height_mm)))
+        short_scale, long_scale = short_mm / short_px, long_mm / long_px
+        if abs(short_scale - long_scale) / ((short_scale + long_scale) / 2) > .12:
+            raise ValueError("Calibration reference is tilted too far from the camera plane")
+        scale = (short_scale + long_scale) / 2
+    corners = [{"x": round(float(point[0][0]), 1), "y": round(float(point[0][1]), 1)} for point in polygon]
+    return scale, {"kind": kind, "scaleMmPerPixel": round(scale, 6), "corners": corners}
 
 
 def normalize_keypoints(payload: object, width: int, height: int) -> dict[str, TailoringPoint]:

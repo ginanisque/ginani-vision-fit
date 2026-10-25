@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QualityDecision, VideoDecision } from '../types'
-import { submitQualityCheck, submitTurnVideoCheck } from './api'
+import { submitMeasurementEstimate, submitQualityCheck, submitTurnVideoCheck } from './api'
+import { bearerToken } from './auth-client'
 
 const decision: QualityDecision = {
   id: 'front-1',
@@ -27,6 +28,15 @@ function fakeResponse(body: unknown, ok = true, status = 200): Response {
     text: async () => JSON.stringify(body),
   } as Response
 }
+
+beforeEach(() => {
+  vi.mocked(bearerToken).mockResolvedValue('api-test-token')
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe('submitQualityCheck', () => {
   it('posts the file and view and returns the decision', async () => {
@@ -72,11 +82,14 @@ describe('submitTurnVideoCheck', () => {
     const result = await submitTurnVideoCheck(file, true)
 
     expect(result).toEqual(decision)
-    expect(fetchFn).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({ method: 'POST' }))
+    expect(bearerToken).toHaveBeenCalledOnce()
+    expect(fetchFn).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
+      method: 'POST',
+      headers: { Authorization: 'Bearer api-test-token' },
+    }))
     const body = fetchFn.mock.calls[0][1].body as FormData
     expect(body.get('consent')).toBe('true')
     expect(body.get('file')).toBe(file)
-    vi.unstubAllGlobals()
   })
 
   it('turns a network rejection into an actionable message', async () => {
@@ -86,6 +99,56 @@ describe('submitTurnVideoCheck', () => {
     await expect(
       submitTurnVideoCheck(new File(['video'], 'turn.webm', { type: 'video/webm' }), true),
     ).rejects.toThrow(/Could not reach the analysis service/)
-    vi.unstubAllGlobals()
+    expect(bearerToken).toHaveBeenCalledOnce()
+    expect(fetchFn).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
+      headers: { Authorization: 'Bearer api-test-token' },
+    }))
+  })
+
+  it('refreshes a rejected cached token and retries the upload once', async () => {
+    vi.mocked(bearerToken)
+      .mockResolvedValueOnce('expired-token')
+      .mockResolvedValueOnce('fresh-token')
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(fakeResponse({ detail: 'expired' }, false, 401))
+      .mockResolvedValueOnce(fakeResponse(decision))
+    vi.stubGlobal('fetch', fetchFn)
+
+    const result = await submitTurnVideoCheck(
+      new File(['video'], 'turn.webm', { type: 'video/webm' }), true,
+    )
+
+    expect(result).toEqual(decision)
+    expect(bearerToken).toHaveBeenNthCalledWith(1, false)
+    expect(bearerToken).toHaveBeenNthCalledWith(2, true)
+    expect(fetchFn).toHaveBeenNthCalledWith(1, '/api/turn-video', expect.objectContaining({
+      headers: { Authorization: 'Bearer expired-token' },
+    }))
+    expect(fetchFn).toHaveBeenNthCalledWith(2, '/api/turn-video', expect.objectContaining({
+      headers: { Authorization: 'Bearer fresh-token' },
+    }))
+  })
+})
+
+describe('submitMeasurementEstimate', () => {
+  it('sends the selected calibration reference separately from the clean front image', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ status: 'review_required' }))
+    vi.stubGlobal('fetch', fetchFn)
+    const front = new File(['front'], 'front.png', { type: 'image/png' })
+    const side = new File(['side'], 'side.png', { type: 'image/png' })
+    const back = new File(['back'], 'back.png', { type: 'image/png' })
+    const reference = new File(['a4'], 'a4.png', { type: 'image/png' })
+
+    await submitMeasurementEstimate(front, side, back, 1650, true, 'session-1', {
+      kind: 'a4', file: reference,
+    })
+
+    expect(bearerToken).toHaveBeenCalledOnce()
+    const request = fetchFn.mock.calls[0][1]
+    expect(request.headers).toEqual({ Authorization: 'Bearer api-test-token' })
+    const body = request.body as FormData
+    expect(body.get('front')).toBe(front)
+    expect(body.get('calibration_kind')).toBe('a4')
+    expect(body.get('calibration_reference')).toBe(reference)
   })
 })

@@ -1,4 +1,4 @@
-import type { AnalysisDecisionDto, AuthSession, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementPathDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
+import type { AnalysisDecisionDto, AuthSession, CalibrationKind, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementPathDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
 import { authClient, bearerToken } from './auth-client'
 
 export interface SubmitOptions {
@@ -53,6 +53,16 @@ async function authorization(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${await bearerToken()}` }
 }
 
+async function authenticatedFetch(path: string, init: RequestInit): Promise<Response> {
+  const request = async (forceRefresh = false) => fetch(apiUrl(path), {
+    ...init,
+    headers: { ...init.headers, Authorization: `Bearer ${await bearerToken(forceRefresh)}` },
+  })
+  let response = await request()
+  if (response.status === 401) response = await request(true)
+  return response
+}
+
 export async function submitCaptureCheck(
   image: File, view: 'front' | 'side' | 'back', consent: boolean,
   sessionId?: string, heightMm?: number,
@@ -66,7 +76,7 @@ export async function submitCaptureCheck(
 
   let response: Response
   try {
-    response = await fetch(apiUrl('/api/capture'), { method: 'POST', headers: await authorization(), body: form })
+    response = await authenticatedFetch('/api/capture', { method: 'POST', body: form })
   } catch {
     throw networkError('/api/capture')
   }
@@ -74,8 +84,29 @@ export async function submitCaptureCheck(
   return await response.json()
 }
 
+export async function submitCaptureBatch(
+  front: File, side: File, back: File, consent: boolean, sessionId?: string, heightMm?: number,
+): Promise<{ captureSessionId: string; results: QualityDecision[] }> {
+  const form = new FormData()
+  form.append('front', front)
+  form.append('side', side)
+  form.append('back', back)
+  form.append('consent', String(consent))
+  if (sessionId) form.append('session_id', sessionId)
+  if (heightMm) form.append('height_mm', String(heightMm))
+  let response: Response
+  try {
+    response = await authenticatedFetch('/api/captures', { method: 'POST', body: form })
+  } catch {
+    throw networkError('/api/captures')
+  }
+  if (!response.ok) throw new Error(`Capture check failed (${response.status}): ${await response.text()}`)
+  return await response.json()
+}
+
 export async function submitMeasurementEstimate(
   front: File, side: File, back: File, heightMm: number, consent: boolean, sessionId?: string,
+  calibration?: { kind: CalibrationKind; file: File },
 ): Promise<CircumferenceEstimate> {
   const form = new FormData()
   form.append('front', front)
@@ -84,11 +115,13 @@ export async function submitMeasurementEstimate(
   form.append('height_mm', String(heightMm))
   form.append('consent', String(consent))
   if (sessionId) form.append('session_id', sessionId)
+  if (calibration) {
+    form.append('calibration_kind', calibration.kind)
+    form.append('calibration_reference', calibration.file)
+  }
   let response: Response
   try {
-    response = await fetch(apiUrl('/api/measurement-estimates'), {
-      method: 'POST', headers: await authorization(), body: form,
-    })
+    response = await authenticatedFetch('/api/measurement-estimates', { method: 'POST', body: form })
   } catch {
     throw networkError('/api/measurement-estimates')
   }
@@ -106,7 +139,7 @@ export async function submitTurnVideoCheck(file: File, consent: boolean, session
 
   let response: Response
   try {
-    response = await fetch(apiUrl('/api/turn-video'), { method: 'POST', headers: await authorization(), body: form })
+    response = await authenticatedFetch('/api/turn-video', { method: 'POST', body: form })
   } catch {
     throw networkError('/api/turn-video')
   }

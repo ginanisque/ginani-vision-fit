@@ -104,6 +104,10 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
         </div>
         <p className="error">{measurementEstimate.warning}</p>
         <p className="muted">{measurementEstimate.recommendedAction}</p>
+        {measurementEstimate.calibration?.status === 'accepted' &&
+          <p className="success">Front-view scale calibrated with {measurementEstimate.calibration.kind?.replace('ruler_12in', '1-foot ruler')}.</p>}
+        {measurementEstimate.calibration?.status === 'rejected' &&
+          <p className="error">The reference could not be used ({measurementEstimate.calibration.reason}); front scale fell back to height.</p>}
         {measurementEstimate.measurementTableId &&
           <p className="success">Saved to the linked measurement table for admin review.</p>}
         <p className="muted">Detected views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>

@@ -103,6 +103,28 @@ def test_capture_is_recorded():
         assert r.json()['analysisRunId']
 
 
+def test_capture_batch_uses_one_session_for_all_views(monkeypatch):
+    import app.main as main_module
+    monkeypatch.setattr(main_module, 'capture_decision', lambda view, image, _data: {
+        'id': f'{view}-test', 'view': view, 'decision': 'review',
+        'dimensions': {'width': image.shape[1], 'height': image.shape[0]},
+        'evidence': [], 'reasons': [],
+    })
+    monkeypatch.setattr(main_module, 'analyze_measurement_capture', lambda _data: {
+        'status': 'disabled', 'models': {},
+    })
+    image = encoded(subject())
+    with TestClient(app) as c:
+        r = c.post('/api/captures', data={'consent': 'true', 'height_mm': '1650'}, files={
+            'front': ('front.png', image), 'side': ('side.png', image), 'back': ('back.png', image),
+        })
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body['results']) == 3
+    assert [item['view'] for item in body['results']] == ['front', 'side', 'back']
+    assert {item['captureSessionId'] for item in body['results']} == {body['captureSessionId']}
+
+
 def test_measurement_runtime_executes_published_keypoint_order(monkeypatch):
     import app.main as main_module
     names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AuthSession, CircumferenceEstimate, ConsentState, HeightUnit, QualityDecision, Step } from './types'
-import { loadAuthSession, logout, submitCaptureCheck, submitMeasurementEstimate } from './lib/api'
+import type { AuthSession, CalibrationKind, CircumferenceEstimate, ConsentState, HeightUnit, QualityDecision, Step } from './types'
+import { loadAuthSession, logout, submitCaptureBatch, submitMeasurementEstimate } from './lib/api'
 import { validateHeight } from './lib/flow'
 import { ConsentStep } from './components/ConsentStep'
 import { HeightStep } from './components/HeightStep'
@@ -11,6 +11,7 @@ import { DecisionLog } from './components/DecisionLog'
 import { LoginPanel } from './components/LoginPanel'
 import { AdminPanel } from './components/AdminPanel'
 import { LandingPage } from './components/LandingPage'
+import { CalibrationReferenceStep } from './components/CalibrationReferenceStep'
 
 interface ImageSlot {
   file: File | null
@@ -27,6 +28,8 @@ export default function App() {
   const [front, setFront] = useState<ImageSlot>({ file: null, preview: null })
   const [side, setSide] = useState<ImageSlot>({ file: null, preview: null })
   const [back, setBack] = useState<ImageSlot>({ file: null, preview: null })
+  const [calibrationKind, setCalibrationKind] = useState<CalibrationKind | null>(null)
+  const [calibration, setCalibration] = useState<ImageSlot>({ file: null, preview: null })
   const [lastRun, setLastRun] = useState<QualityDecision[]>([])
   const [log, setLog] = useState<QualityDecision[]>([])
   const [checking, setChecking] = useState(false)
@@ -51,37 +54,34 @@ export default function App() {
     setter(file ? { file, preview: URL.createObjectURL(file) } : { file: null, preview: null })
   }
 
+  const handleCalibration = (file: File | null) => {
+    if (calibration.preview) URL.revokeObjectURL(calibration.preview)
+    setMeasurementEstimate(null)
+    setCalibration(file ? { file, preview: URL.createObjectURL(file) } : { file: null, preview: null })
+  }
+
   const runChecks = async () => {
     if (!front.file || !side.file || !back.file || !consent.agreed || !consent.acknowledged) return
     setChecking(true)
     setError(null)
-    const next: QualityDecision[] = []
+    let next: QualityDecision[] = []
     let activeSessionId = captureSessionId
     const numericHeight = Number(height.value) * (height.unit === 'in' ? 25.4 : 10)
     try {
-      const pairs: Array<[ImageSlot, 'front' | 'side' | 'back']> = [
-        [front, 'front'],
-        [side, 'side'],
-        [back, 'back'],
-      ]
-      for (const [slot, view] of pairs) {
-        if (slot.file) {
-          const result = await submitCaptureCheck(
-            slot.file, view, consent.agreed && consent.acknowledged,
-            activeSessionId, numericHeight,
-          )
-          activeSessionId = result.captureSessionId ?? activeSessionId
-          setCaptureSessionId(activeSessionId)
-          next.push(result)
-        }
-      }
+      const batch = await submitCaptureBatch(
+        front.file, side.file, back.file, consent.agreed && consent.acknowledged,
+        activeSessionId, numericHeight,
+      )
+      next = batch.results
+      activeSessionId = batch.captureSessionId
+      setCaptureSessionId(activeSessionId)
       setLastRun(next)
       setLog((prev) => [...prev, ...next])
       if (next.length === 3 && next.every((result) => result.decision !== 'recapture')) {
         try {
           setMeasurementEstimate(await submitMeasurementEstimate(
             front.file, side.file, back.file, numericHeight, consent.agreed && consent.acknowledged,
-            activeSessionId,
+            activeSessionId, calibrationKind && calibration.file ? { kind: calibrationKind, file: calibration.file } : undefined,
           ))
         } catch (estimateError) {
           setError(estimateError instanceof Error ? estimateError.message : String(estimateError))
@@ -157,15 +157,20 @@ export default function App() {
             onChangeValue={(v) => setHeight((h) => ({ ...h, value: v }))}
             onChangeUnit={(u) => setHeight((h) => ({ ...h, unit: u }))}
             onBack={() => setStep('consent')}
-            onContinue={() => setStep('front')}
+            onContinue={() => setStep('calibration')}
           />
         )}
+        {step === 'calibration' && <CalibrationReferenceStep
+          kind={calibrationKind} preview={calibration.preview}
+          onKind={setCalibrationKind} onSelect={handleCalibration}
+          onBack={() => setStep('height')} onContinue={() => setStep('front')}
+        />}
         {step === 'front' && (
           <ImageSelectStep
             view="front"
             preview={front.preview}
             onSelect={(f) => handleImage('front', f)}
-            onBack={() => setStep('height')}
+            onBack={() => setStep('calibration')}
             onContinue={() => setStep('side')}
           />
         )}

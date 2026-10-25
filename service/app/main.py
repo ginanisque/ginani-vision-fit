@@ -19,7 +19,7 @@ from .database import database_health
 from .measurements import REGISTRY_VERSION, persist_runtime_estimates, published_measurement_paths, router as measurements_router
 from .roboflow import analyze_keypoint_capture, analyze_measurement_capture, configuration_status as roboflow_status
 from .circumference import _apply_profile, _load_calibration_profile, estimate_back_measurements
-from .path_estimation import calculate_ordered_path, normalize_keypoints, view_scale_mm_per_pixel
+from .path_estimation import calculate_ordered_path, normalize_keypoints, reference_scale_mm_per_pixel, view_scale_mm_per_pixel
 
 app = FastAPI(title="VisionFit quality service", version="0.1.0")
 app.include_router(auth_router)
@@ -118,6 +118,8 @@ async def measurement_estimates(
     session_id: str | None = Form(None),
     front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
     user: SessionUser = Depends(current_user),
+    calibration_kind: str | None = Form(None),
+    calibration_reference: UploadFile | None = File(None),
 ) -> dict:
     """Execute published ordered tailoring-keypoint paths across three calibrated views."""
     if not consent:
@@ -135,6 +137,18 @@ async def measurement_estimates(
             raise HTTPException(400, 'Select decodable front, side and back images at least 64 pixels in each dimension')
         images[view] = image
         encoded[view] = data
+    calibration_image = None
+    if calibration_reference is not None:
+        if not calibration_kind:
+            raise HTTPException(422, 'Choose the calibration reference type')
+        data = await calibration_reference.read(MAX_CAPTURE_BYTES + 1)
+        if len(data) > MAX_CAPTURE_BYTES:
+            raise HTTPException(413, 'Calibration image exceeds 20 MiB')
+        calibration_image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
+        if calibration_image is None or min(calibration_image.shape[:2]) < MIN_DIMENSION:
+            raise HTTPException(400, 'Select a decodable calibration image at least 64 pixels in each dimension')
+        if calibration_image.shape[:2] != images["front"].shape[:2]:
+            raise HTTPException(422, 'Calibration and clean front images must use the same resolution')
     try:
         stored = session_tailoring_keypoints(user, session_id) if session_id else {}
     except PermissionError as error:
@@ -166,11 +180,19 @@ async def measurement_estimates(
             raise HTTPException(503, "Tailoring keypoints are unavailable. " + reason)
         scales = {}
         scale_failures = {}
+        calibration = {"status": "not_provided", "method": "height"}
         for view, image in images.items():
             try:
                 scales[view] = view_scale_mm_per_pixel(image, height_mm)
             except ValueError as error:
                 scale_failures[view] = str(error)
+        if calibration_image is not None and calibration_kind:
+            try:
+                scales["front"], evidence = reference_scale_mm_per_pixel(calibration_image, calibration_kind)
+                calibration = {"status": "accepted", "method": "known front-view reference", **evidence}
+                scale_failures.pop("front", None)
+            except ValueError as error:
+                calibration = {"status": "rejected", "method": "height fallback", "reason": str(error)}
         results = [calculate_ordered_path(path, points_by_view, scales) for path in published_measurement_paths()]
         estimated = [result for result in results if result["status"] == "estimated"]
         blocked = [result for result in results if result["status"] == "blocked"]
@@ -216,6 +238,7 @@ async def measurement_estimates(
             "measurements": measurements, "blockedMeasurements": blocked,
             "detectedKeypoints": {view: sorted(points) for view, points in points_by_view.items()},
             "predictionFailures": failures, "scaleFailures": scale_failures,
+            "calibration": calibration,
             **(persistence or {}),
         }
     except HTTPException:
@@ -234,6 +257,18 @@ async def capture(
         raise HTTPException(403, 'Explicit consent is required before processing')
     if view not in CAPTURE_VIEWS:
         raise HTTPException(400, 'view must be front, side or back')
+    try:
+        capture_session_id = ensure_session(user, session_id, height_mm)
+    except PermissionError as error:
+        raise HTTPException(404, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    return await _process_capture_upload(user, capture_session_id, view, file)
+
+
+async def _process_capture_upload(
+    user: SessionUser, capture_session_id, view: str, file: UploadFile,
+) -> dict:
     data = await file.read(MAX_CAPTURE_BYTES + 1)
     if len(data) > MAX_CAPTURE_BYTES:
         raise HTTPException(413, 'Image exceeds 20 MiB')
@@ -249,12 +284,6 @@ async def capture(
             "kind": "tailoring-keypoint", "label": point.key, "confidence": point.confidence,
             "box": {"x": round(point.x), "y": round(point.y), "width": 2, "height": 2},
         } for point in tailoring_points.values())
-    try:
-        capture_session_id = ensure_session(user, session_id, height_mm)
-    except PermissionError as error:
-        raise HTTPException(404, str(error)) from error
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
     persisted = persist_analysis(
         user=user, session_id=capture_session_id, view=view, data=data,
         content_type=file.content_type or "application/octet-stream", record=record,
@@ -263,6 +292,28 @@ async def capture(
     record.update(persisted)
     log.append(record)
     return record
+
+
+@app.post('/api/captures')
+async def capture_batch(
+    consent: bool = Form(False), session_id: str | None = Form(None),
+    height_mm: float | None = Form(None), front: UploadFile = File(...),
+    side: UploadFile = File(...), back: UploadFile = File(...),
+    user: SessionUser = Depends(current_user),
+) -> dict:
+    """Authenticate once, then process all capture views in one shared session."""
+    if not consent:
+        raise HTTPException(403, 'Explicit consent is required before processing')
+    try:
+        capture_session_id = ensure_session(user, session_id, height_mm)
+    except PermissionError as error:
+        raise HTTPException(404, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    results = []
+    for view, upload in (("front", front), ("side", side), ("back", back)):
+        results.append(await _process_capture_upload(user, capture_session_id, view, upload))
+    return {"captureSessionId": str(capture_session_id), "results": results}
 
 # A slow turn is analysed by sampling a fixed number of frames across the clip, so
 # the user does not need to time the recording precisely. This generous cap only

@@ -143,7 +143,9 @@ export interface AnalysisDecisionDto {
   createdAt: string
 }
 
-export type Step = 'consent' | 'height' | 'front' | 'side' | 'back' | 'review'
+export type CalibrationKind = 'a4' | 'letter' | 'ruler_12in'
+
+export type Step = 'consent' | 'height' | 'calibration' | 'front' | 'side' | 'back' | 'review'
 
 export interface ConsentState {
   agreed: boolean
@@ -218,6 +220,13 @@ export interface CircumferenceEstimate {
   measurementTableId?: string
   persistedKeys?: string[]
   skippedKeys?: string[]
+  calibration?: {
+    status: 'not_provided' | 'accepted' | 'rejected'
+    method: string
+    kind?: CalibrationKind
+    scaleMmPerPixel?: number
+    reason?: string
+  }
   trainingFeatures: { heightMm: number; rawMeasurementsMm: Record<string, number> }
   blockedMeasurements?: Array<{
     key: string

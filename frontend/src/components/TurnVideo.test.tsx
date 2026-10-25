@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TurnVideo } from './TurnVideo'
+import { bearerToken } from '../lib/auth-client'
 
-afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => {
+  vi.mocked(bearerToken).mockResolvedValue('turn-video-token')
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+  vi.unstubAllGlobals()
+})
 describe('slow-turn workflow', () => {
   it('handles unsupported camera recording without processing', async () => {
     const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
@@ -20,7 +28,9 @@ describe('slow-turn workflow', () => {
     await user.upload(screen.getByLabelText(/choose video/i), new File(['video'],'turn.webm',{type:'video/webm'}))
     await user.click(screen.getByRole('button',{name:'Check video'}))
     expect(await screen.findByText(/Video: review/)).toBeInTheDocument()
+    expect(bearerToken).toHaveBeenCalledOnce()
     expect(fetchMock.mock.calls[0][0]).toBe('/api/turn-video')
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({ Authorization: 'Bearer turn-video-token' })
     expect((fetchMock.mock.calls[0][1].body as FormData).get('consent')).toBe('true')
     await user.click(screen.getByRole('button',{name:'Clear video'}))
     expect(screen.queryByText(/Video: review/)).not.toBeInTheDocument()
@@ -38,6 +48,10 @@ describe('slow-turn workflow', () => {
     await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
     await user.click(screen.getByRole('button', { name: 'Check video' }))
     await screen.findByText(/Video: review/)
+    expect(bearerToken).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
+      headers: { Authorization: 'Bearer turn-video-token' },
+    }))
     const coverage = screen.getByText(/Turn coverage:/)
     expect(coverage.textContent).toContain('complete')
     expect(coverage.textContent).toContain('front, back, side')
@@ -51,7 +65,10 @@ describe('slow-turn workflow', () => {
     await user.click(screen.getByRole('button', { name: 'Check video' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Could not reach the analysis service')
-    expect(fetchMock).toHaveBeenCalledWith('/api/turn-video', expect.anything())
+    expect(bearerToken).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
+      headers: { Authorization: 'Bearer turn-video-token' },
+    }))
   })
   it('rejects an oversized video before uploading', async () => {
     const fetchMock = vi.fn()
