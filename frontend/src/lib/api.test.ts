@@ -55,6 +55,8 @@ describe('submitQualityCheck', () => {
     expect(body.get('view')).toBe('front')
     expect(body.get('consent')).toBe('true')
     expect(body.get('file')).toBe(file)
+    expect(body.get('calibration_kind')).toBe('a4')
+    expect(body.get('calibration_reference')).toBe(reference)
   })
 
   it('throws on a non-ok response', async () => {
@@ -80,8 +82,11 @@ describe('submitTurnVideoCheck', () => {
     const fetchFn = vi.fn().mockResolvedValue(fakeResponse(decision))
     vi.stubGlobal('fetch', fetchFn)
     const file = new File(['video'], 'turn.webm', { type: 'video/webm' })
+    const reference = new File(['reference'], 'a4.png', { type: 'image/png' })
 
-    const result = await submitTurnVideoCheck(file, true, 'session-1', 1650, true)
+    const result = await submitTurnVideoCheck(
+      file, true, 'session-1', 1650, true, { kind: 'a4', file: reference },
+    )
 
     expect(result).toEqual(decision)
     expect(bearerToken).toHaveBeenCalledOnce()

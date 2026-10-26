@@ -135,8 +135,8 @@ Start from `../docs/subject_manifest.example.csv`; every exported source group m
 
 ## AWS container
 
-`Dockerfile` packages the pinned OpenCV 5 service, the optional MediaPipe Pose runtime and the
-included task model. For a one-task ECS Express Mode deployment, frontend URL configuration,
+Dockerfile packages the pinned OpenCV 5 service and MediaPipe Pose runtime, then downloads the
+official pose task during the container build. For a one-task ECS Express Mode deployment, frontend URL configuration,
 health checks and first-test steps, see [`../deploy/AWS_DEPLOYMENT.md`](../deploy/AWS_DEPLOYMENT.md).
 
 ## Neon persistence

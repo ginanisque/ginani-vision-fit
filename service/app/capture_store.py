@@ -55,7 +55,13 @@ def ensure_session(
 def delete_capture_session(
     session_id: str, *, owner_id: UUID | None = None, older_than: datetime | None = None,
 ) -> dict | None:
-    """Delete one session, associated measurements, and private capture objects."""
+    """Delete one session and its private objects using a retryable two-phase flow.
+
+    The database first records that deletion is in progress. Object deletion then
+    happens outside a database transaction. If storage is temporarily unavailable,
+    the row remains in deleting state with its object keys intact, so the same
+    request or retention worker can safely retry.
+    """
     conditions = ["id = %s"]
     params: list[object] = [session_id]
     if owner_id is not None:
@@ -76,15 +82,30 @@ def delete_capture_session(
             "select storage_key from capture_assets where session_id = %s",
             (session["id"],),
         ).fetchall()
-        for asset in assets:
-            delete_private(asset["storage_key"])
+        conn.execute(
+            "update capture_sessions set status = 'deleting' where id = %s",
+            (session["id"],),
+        )
+
+    for asset in assets:
+        delete_private(asset["storage_key"])
+
+    with connection() as conn:
+        # Eligibility and ownership were established before the deleting marker
+        # updated updated_at; finalization therefore keys only on the locked ID.
+        session = conn.execute(
+            "select id from capture_sessions where id = %s for update",
+            (session["id"],),
+        ).fetchone()
+        if session is None:
+            return None
         deleted_tables = conn.execute(
-            f"delete from measurement_tables where capture_session_id = %s "
-            f"and exists (select 1 from capture_sessions where {where})",
-            [session["id"], *params],
+            "delete from measurement_tables where capture_session_id = %s",
+            (session["id"],),
         ).rowcount
         deleted = conn.execute(
-            f"delete from capture_sessions where {where} returning id", params,
+            "delete from capture_sessions where id = %s returning id",
+            (session["id"],),
         ).fetchone()
         if deleted is None:
             return None

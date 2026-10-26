@@ -14,6 +14,7 @@
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/006_runtime_integrity.sql
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/007_training_consent.sql
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/008_external_vision_consent.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/009_retryable_capture_deletion.sql
    ```
 
 The schema stores structured data and private object-storage references. Body images and videos
@@ -26,5 +27,5 @@ must never reach the browser.
 
 Capture sessions and their linked measurement tables are removed after 30 days without activity
 by default (`VISIONFIT_RETENTION_DAYS`). Users can also delete a capture session immediately from
-the capture review screen. Each deletion removes the private object-storage files before deleting
-the associated database records; a failed object deletion leaves the session available for retry.
+the capture review screen. Each deletion first marks the session as deleting, removes its private object-storage files,
+and then deletes the database rows. A storage failure leaves the object keys available for retry.

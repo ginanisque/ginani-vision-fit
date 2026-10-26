@@ -298,6 +298,15 @@ export interface VideoDecision {
   durationSeconds: number
   samples: Array<{timeSeconds: number; quality: 'pass' | 'fail'; reasons: string[]}>
   turnCoverage?: TurnCoverage
+  calibration?: {
+    status: 'accepted' | 'rejected' | 'not_provided'
+    method: string
+    kind?: CalibrationKind
+    scaleMmPerPixel?: number
+    heightScaleMmPerPixel?: number
+    disagreementPercent?: number
+    reason?: string
+  }
   measurementEstimates?: {
     modelVersion: string
     measurementTableId: string

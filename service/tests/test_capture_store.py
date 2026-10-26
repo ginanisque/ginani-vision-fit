@@ -35,6 +35,8 @@ class FakeConnection:
             return QueryResult(row={"id": "session-1"})
         if normalized.startswith("select storage_key from capture_assets"):
             return QueryResult(rows=[{"storage_key": "private/object-1"}])
+        if normalized.startswith("update capture_sessions set status"):
+            return QueryResult(rowcount=1)
         if normalized.startswith("delete from measurement_tables"):
             return QueryResult(rowcount=2)
         if normalized.startswith("delete from capture_sessions"):
@@ -42,7 +44,7 @@ class FakeConnection:
         raise AssertionError(f"Unexpected SQL: {normalized}")
 
 
-def test_session_deletion_removes_objects_before_database_rows(monkeypatch):
+def test_session_deletion_marks_retryable_state_before_removing_objects(monkeypatch):
     events = []
     monkeypatch.setattr(capture_store, "connection", lambda: FakeConnection(events))
     monkeypatch.setattr(
@@ -53,9 +55,11 @@ def test_session_deletion_removes_objects_before_database_rows(monkeypatch):
     result = capture_store.delete_capture_session("session-1", owner_id=uuid4())
 
     assert result == {"assetsDeleted": 1, "measurementTablesDeleted": 2}
-    assert events[2] == "delete-object:private/object-1"
-    assert events[3].startswith("delete from measurement_tables")
-    assert events[4].startswith("delete from capture_sessions")
+    assert events[2].startswith("update capture_sessions set status")
+    assert events[3] == "delete-object:private/object-1"
+    assert events[4].startswith("select id from capture_sessions")
+    assert events[5].startswith("delete from measurement_tables")
+    assert events[6].startswith("delete from capture_sessions")
 
 
 def test_failed_object_deletion_preserves_database_rows(monkeypatch):

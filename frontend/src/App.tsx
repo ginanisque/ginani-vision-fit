@@ -204,7 +204,7 @@ export default function App() {
           />
           <div className="actions">
             <button className="secondary" onClick={() => setStep('height')}>Back</button>
-            <button className="secondary" onClick={() => setStep('calibration')}>Use separate photos instead</button>
+            <button className="secondary" onClick={() => setStep('calibration')}>Add optional reference photos</button>
           </div>
         </>}
         {step === 'calibration' && <CalibrationReferenceStep

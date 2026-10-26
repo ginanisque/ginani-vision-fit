@@ -78,3 +78,7 @@ cd visionfit/frontend && npm test && npm run build
 The OpenCV service can run on AWS while the frontend remains separately hosted. See
 [`deploy/AWS_DEPLOYMENT.md`](deploy/AWS_DEPLOYMENT.md) for the ECS Express Mode container setup,
 frontend API URL configuration, cost notes and first-test checklist.
+
+## Hackathon demonstration
+
+Use [docs/HACKATHON_DEMO.md](docs/HACKATHON_DEMO.md) for the three-minute judging flow, capture setup and deployment checklist.

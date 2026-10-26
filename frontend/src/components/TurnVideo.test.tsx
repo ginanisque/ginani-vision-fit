@@ -121,4 +121,42 @@ describe('slow-turn workflow', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/larger than 50 MB/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+  it('submits an optional calibration photo and shows at least five video measurements', async () => {
+    const measurements = ['Bust', 'Waist', 'Hip', 'Front shoulder', 'Across chest'].map((displayName, index) => ({
+      key: displayName.toLowerCase().replace(/ /g, '_'),
+      displayName,
+      value: 80 + index,
+      unit: 'cm' as const,
+      confidence: 0.6,
+    }))
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      id: 'v', view: 'turn', decision: 'review', durationSeconds: 12, samples: [],
+      calibration: {
+        status: 'accepted', method: 'known object cross-check; height remains primary',
+        disagreementPercent: 2.4,
+      },
+      measurementEstimates: {
+        modelVersion: 'vf3-test', measurementTableId: 'table-1',
+        persistedKeys: measurements.map(item => item.key), skippedKeys: [],
+        measurements, warning: 'Review required.',
+      },
+      reasons: [], scope: 'coverage.',
+    }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} heightMm={1700} />)
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByLabelText('Reference object'), 'a4')
+    const reference = new File(['image'], 'a4.png', { type: 'image/png' })
+    await user.upload(screen.getByLabelText('Calibration photo'), reference)
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    expect(await screen.findByText('Video measurement estimates')).toBeInTheDocument()
+    for (const measurement of measurements) {
+      expect(screen.getByText(measurement.displayName)).toBeInTheDocument()
+    }
+    const body = fetchMock.mock.calls[0][1].body as FormData
+    expect(body.get('calibration_kind')).toBe('a4')
+    expect(body.get('calibration_reference')).toBe(reference)
+  })
+
 })

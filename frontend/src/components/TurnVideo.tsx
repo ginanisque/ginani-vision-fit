@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { submitTurnVideoCheck } from '../lib/api'
 import { convertLength } from '../measurements/units'
-import type { HeightUnit, VideoDecision } from '../types'
+import type { CalibrationKind, HeightUnit, VideoDecision } from '../types'
 
 /** Backend limit for turn videos (service/app/main.py). */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
@@ -23,6 +23,8 @@ export function TurnVideo({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [recording, setRecording] = useState(false)
+  const [calibrationKind, setCalibrationKind] = useState<CalibrationKind | ''>('')
+  const [calibrationFile, setCalibrationFile] = useState<File | null>(null)
   const video = useRef<HTMLVideoElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const stream = useRef<MediaStream | null>(null)
@@ -76,7 +78,10 @@ export function TurnVideo({
     }
     setBusy(true); setError(''); setResult(null)
     try {
-      const next = await submitTurnVideoCheck(file, consent, sessionId, heightMm, trainingConsent)
+      const next = await submitTurnVideoCheck(
+        file, consent, sessionId, heightMm, trainingConsent,
+        calibrationKind && calibrationFile ? { kind: calibrationKind, file: calibrationFile } : undefined,
+      )
       setResult(next)
       if (next.captureSessionId) onSessionCreated?.(next.captureSessionId)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -86,6 +91,28 @@ export function TurnVideo({
     <h1>One slow-turn video</h1>
     <p>Use a helper or fixed camera. Show your head and bare feet with space around them. Keep the camera level, around waist height, without tilting. Step back until your full body fits.</p>
     <p>Stand naturally, shoulders relaxed, feet steady and arms slightly away from your body. Turn once slowly, showing front, both sides and back. Keep the waist cord visible. Recording stops at 20 seconds — longer clips are sampled across the whole turn.</p>
+    <details className="guide">
+      <summary>Optional: add one calibration photo</summary>
+      <p>This is a scale cross-check only—the video and your height remain the primary measurement source. Use the same camera position and zoom, and hold the object flat beside your torso without covering your outline.</p>
+      <label>Reference object
+        <select value={calibrationKind} onChange={event => {
+          setCalibrationKind(event.target.value as CalibrationKind | '')
+          setCalibrationFile(null)
+        }}>
+          <option value="">No calibration photo</option>
+          <option value="a4">A4 sheet (210 × 297 mm)</option>
+          <option value="letter">US Letter sheet (8.5 × 11 in)</option>
+          <option value="ruler_12in">12-inch ruler</option>
+        </select>
+      </label>
+      {calibrationKind && <label>Calibration photo
+        <input type="file" accept="image/*" onChange={event => {
+          setCalibrationFile(event.target.files?.[0] ?? null)
+          setResult(null)
+        }} />
+      </label>}
+      {calibrationFile && <p className="muted">Reference ready: {calibrationFile.name}</p>}
+    </details>
     <video ref={video} src={url ?? undefined} controls={!recording} muted playsInline aria-label="Slow-turn video preview" />
     <div className="actions">
       <button onClick={recording ? stop : start} disabled={busy || !consent}>{recording ? 'Stop recording' : 'Record slow turn'}</button>
@@ -112,8 +139,20 @@ export function TurnVideo({
             .map(view => `${view} ${result.turnCoverage?.selectedViewFrames?.[view]}s`).join(' · ')}
         </p>
       )}
+      {result.calibration && <p className={result.calibration.status === 'accepted' ? 'muted' : result.calibration.status === 'rejected' ? 'error' : 'muted'}>
+        Scale reference: <strong>{result.calibration.status.replace('_', ' ')}</strong> — {result.calibration.method}
+        {result.calibration.disagreementPercent !== undefined && <> ({result.calibration.disagreementPercent}% difference)</>}
+        {result.calibration.reason && <>. {result.calibration.reason}</>}
+      </p>}
       {result.measurementEstimates && <section className="estimate-panel" aria-label="Video estimates submitted for review">
-        <h3>Video estimates sent for admin review</h3>
+        <h3>Video measurement estimates</h3>
+        <div className="measurement-grid">
+          {result.measurementEstimates.measurements.map(measurement => <article key={measurement.key}>
+            <strong>{measurement.displayName}</strong>
+            <span>{convertLength(measurement.value, 'cm', measurementUnit).toFixed(1)} {measurementUnit}</span>
+            <small>confidence {Math.round(measurement.confidence * 100)}% · review required</small>
+          </article>)}
+        </div>
         {result.measurementEstimates.persistedKeys.length > 0
           ? <p>{result.measurementEstimates.persistedKeys.length} experimental measurements were saved for an administrator to review and adjust. They are not approved tailoring values.</p>
           : <p>No new measurements were saved. Existing approved values were left unchanged.</p>}

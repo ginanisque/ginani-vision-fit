@@ -16,3 +16,11 @@ os.environ.setdefault(
 )
 os.environ.setdefault("ROBOFLOW_ENABLED", "false")
 os.environ.setdefault("VISIONFIT_RETENTION_ENABLED", "false")
+
+# Safe placeholders keep unit tests hermetic; database and storage calls are mocked.
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/visionfit_test")
+os.environ.setdefault("NEON_AUTH_BASE_URL", "https://auth.example.test")
+os.environ.setdefault("NEON_AUTH_JWKS_URL", "https://auth.example.test/.well-known/jwks.json")
+os.environ.setdefault("AWS_ENDPOINT_URL_S3", "https://storage.example.test")
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("S3_BUCKET", "visionfit-test")

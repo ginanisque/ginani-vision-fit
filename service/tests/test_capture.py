@@ -332,6 +332,11 @@ def test_complete_video_saves_review_only_measurements(tmp_path, monkeypatch):
         }],
     }
     monkeypatch.setattr(main_module, "estimate_circumferences", lambda *_args: geometry)
+    monkeypatch.setattr(
+        main_module, "reference_scale_mm_per_pixel",
+        lambda *_args: (2.0, {"kind": "a4", "scaleMmPerPixel": 2.0, "corners": []}),
+    )
+    monkeypatch.setattr(main_module, "view_scale_mm_per_pixel", lambda *_args: 2.05)
     saved = {}
     session_arguments = {}
     monkeypatch.setattr(main_module, "ensure_session", lambda *args: (
@@ -355,9 +360,12 @@ def test_complete_video_saves_review_only_measurements(tmp_path, monkeypatch):
             "/api/turn-video",
             data={
                 "consent": "true", "height_mm": "1700", "session_id": str(uuid4()),
-                "training_consent": "true",
+                "training_consent": "true", "calibration_kind": "a4",
             },
-            files={"file": ("turn.avi", path.read_bytes(), "video/x-msvideo")},
+            files={
+                "file": ("turn.avi", path.read_bytes(), "video/x-msvideo"),
+                "calibration_reference": ("reference.png", encoded(subject()), "image/png"),
+            },
         )
 
     assert response.status_code == 200
@@ -365,5 +373,7 @@ def test_complete_video_saves_review_only_measurements(tmp_path, monkeypatch):
     assert result["turnCoverage"]["selectedViewFrames"].keys() == {"front", "side", "back"}
     assert result["measurementEstimates"]["persistedKeys"] == ["bust"]
     assert result["measurementEstimates"]["measurements"][0]["requiresReview"] is True
+    assert result["calibration"]["status"] == "accepted"
+    assert result["calibration"]["disagreementPercent"] == 2.4
     assert saved["estimates"][0]["valueMm"] == 900.0
     assert session_arguments["args"][2:] == (1700.0, True)

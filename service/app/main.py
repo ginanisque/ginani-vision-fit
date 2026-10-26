@@ -374,9 +374,9 @@ async def _process_capture_upload(
     image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
     if image is None or min(image.shape[:2]) < MIN_DIMENSION:
         raise HTTPException(400, 'Select a decodable image at least 64 pixels in each dimension')
-    record = capture_decision(view, image, data)
+    record = await asyncio.to_thread(capture_decision, view, image, data)
     record["measurementVision"] = (
-        analyze_keypoint_capture(data) if external_vision_consent
+        await asyncio.to_thread(analyze_keypoint_capture, data) if external_vision_consent
         else {"status": "not_consented", "provider": "roboflow_workflows"}
     )
     keypoint_model = record["measurementVision"]
@@ -386,8 +386,8 @@ async def _process_capture_upload(
             "kind": "tailoring-keypoint", "label": point.key, "confidence": point.confidence,
             "box": {"x": round(point.x), "y": round(point.y), "width": 2, "height": 2},
         } for point in tailoring_points.values())
-    persisted = persist_analysis(
-        user=user, session_id=capture_session_id, view=view, data=data,
+    persisted = await asyncio.to_thread(
+        persist_analysis, user=user, session_id=capture_session_id, view=view, data=data,
         content_type=file.content_type or "application/octet-stream", record=record,
         width=image.shape[1], height=image.shape[0],
     )
@@ -416,10 +416,22 @@ async def capture_batch(
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     results = []
-    for view, upload in (("front", front), ("side", side), ("back", back)):
-        results.append(await _process_capture_upload(
-            user, capture_session_id, view, upload, external_vision_consent,
-        ))
+    try:
+        for view, upload in (("front", front), ("side", side), ("back", back)):
+            results.append(await _process_capture_upload(
+                user, capture_session_id, view, upload, external_vision_consent,
+            ))
+    except Exception:
+        # A newly-created batch must not leave private captures in a session ID
+        # the client never received. Existing sessions remain recoverable by ID.
+        if session_id is None:
+            try:
+                await asyncio.to_thread(
+                    delete_capture_session, str(capture_session_id), owner_id=user.id,
+                )
+            except Exception:
+                logger.exception("Could not roll back failed capture batch %s", capture_session_id)
+        raise
     return {"captureSessionId": str(capture_session_id), "results": results}
 
 # A slow turn is analysed by sampling a fixed number of frames across the clip, so
@@ -494,6 +506,8 @@ async def turn_video(
     consent: bool = Form(False), session_id: str | None = Form(None),
     height_mm: float | None = Form(None),
     training_consent: bool = Form(False),
+    calibration_kind: Annotated[str | None, Form()] = None,
+    calibration_reference: Annotated[UploadFile | None, File()] = None,
     file: UploadFile = File(...), user: SessionUser = Depends(current_user),
 ) -> dict:
     """Bounded local video inspection; temporary source is always deleted."""
@@ -504,6 +518,23 @@ async def turn_video(
     from datetime import datetime, timezone
     if not consent:
         raise HTTPException(403, 'Explicit consent is required before processing')
+    if height_mm is not None and not 1000 <= height_mm <= 2500:
+        raise HTTPException(422, 'Height must be between 1000 and 2500 mm')
+
+    calibration_image = None
+    if calibration_reference is not None:
+        if not calibration_kind:
+            raise HTTPException(422, 'Choose the calibration reference type')
+        calibration_data = await calibration_reference.read(MAX_CAPTURE_BYTES + 1)
+        if len(calibration_data) > MAX_CAPTURE_BYTES:
+            raise HTTPException(413, 'Calibration image exceeds 20 MiB')
+        calibration_image = (
+            cv2.imdecode(np.frombuffer(calibration_data, np.uint8), cv2.IMREAD_COLOR)
+            if calibration_data else None
+        )
+        if calibration_image is None or min(calibration_image.shape[:2]) < MIN_DIMENSION:
+            raise HTTPException(400, 'Select a decodable calibration image at least 64 pixels in each dimension')
+
     data = await file.read(50 * 1024 * 1024 + 1)
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(413, 'Video exceeds 50 MiB')
@@ -532,11 +563,13 @@ async def turn_video(
                                 quality='pass' if result.passed else 'fail', reasons=list(result.reasons)))
 
         selected_frames: dict[str, np.ndarray] = {}
-        coverage = turn_coverage(reader, count, duration, height_mm, selected_frames)
-
-        sample_quality_pass = len(samples) == 5 and all(
-            sample["quality"] == "pass" for sample in samples
+        coverage = await asyncio.to_thread(
+            turn_coverage, reader, count, duration, height_mm, selected_frames,
         )
+
+        passed_sample_count = sum(sample["quality"] == "pass" for sample in samples)
+        # A single transition frame should not suppress an otherwise usable turn.
+        sample_quality_pass = len(samples) >= 4 and passed_sample_count >= 4
         reasons = []
         if not sample_quality_pass:
             reasons.append(
@@ -554,11 +587,45 @@ async def turn_video(
         else:
             reasons.append('Rotation completeness could not be verified automatically; a reviewer must confirm a full turn.')
 
+        calibration = {"status": "not_provided", "method": "height from selected video frames"}
+        if calibration_image is not None and calibration_kind and height_mm is not None:
+            try:
+                reference_scale, reference_evidence = await asyncio.to_thread(
+                    reference_scale_mm_per_pixel, calibration_image, calibration_kind,
+                )
+                body_scale = await asyncio.to_thread(
+                    view_scale_mm_per_pixel, calibration_image, height_mm,
+                )
+                disagreement = abs(reference_scale - body_scale) / body_scale
+                if disagreement <= 0.15:
+                    calibration = {
+                        "status": "accepted",
+                        "method": "known object cross-check; height remains primary",
+                        **reference_evidence,
+                        "heightScaleMmPerPixel": round(body_scale, 6),
+                        "disagreementPercent": round(disagreement * 100, 1),
+                    }
+                else:
+                    calibration = {
+                        "status": "rejected",
+                        "method": "height fallback",
+                        **reference_evidence,
+                        "heightScaleMmPerPixel": round(body_scale, 6),
+                        "disagreementPercent": round(disagreement * 100, 1),
+                        "reason": "Reference and body scales differ by more than 15%; keep the object flat at the torso plane.",
+                    }
+            except ValueError as error:
+                calibration = {
+                    "status": "rejected", "method": "height fallback",
+                    "reason": str(error),
+                }
+
         measurement_estimates = None
         measurement_estimate_error = None
         if coverage['status'] == 'complete' and sample_quality_pass and height_mm is not None:
             try:
-                geometry = estimate_circumferences(
+                geometry = await asyncio.to_thread(
+                    estimate_circumferences,
                     selected_frames['front'], selected_frames['side'], height_mm,
                     selected_frames['back'],
                 )
@@ -591,13 +658,13 @@ async def turn_video(
         record = dict(id=str(uuid.uuid4()), view='turn', decision='review',
                       imageFingerprint=dict(sha256=hashlib.sha256(data).hexdigest()),
                       checkedAt=datetime.now(timezone.utc).isoformat(), durationSeconds=round(duration,2),
-                      samples=samples, turnCoverage=coverage, reasons=reasons,
+                      samples=samples, turnCoverage=coverage, calibration=calibration, reasons=reasons,
                       scope='Sampled exposure/blur and pose-orientation turn coverage across the clip. '
                             'Posture quality and single-continuous-turn confirmation still require review.',
                       provisionalThresholds=True)
         try:
-            capture_session_id = ensure_session(
-                user, session_id, height_mm, training_consent,
+            capture_session_id = await asyncio.to_thread(
+                ensure_session, user, session_id, height_mm, training_consent,
             )
         except PermissionError as error:
             raise HTTPException(404, str(error)) from error
@@ -611,13 +678,15 @@ async def turn_video(
                 }
                 for item in measurement_estimates["measurements"]
             ]
-            persistence = persist_video_estimates(
+            persistence = await asyncio.to_thread(
+                persist_video_estimates,
                 user=user, session_id=str(capture_session_id), estimates=persisted_estimates,
                 model_version=measurement_estimates["modelVersion"],
             )
             record["measurementEstimates"] = {
                 **measurement_estimates,
                 **persistence,
+                "calibration": calibration,
                 "measurements": [
                     {**item, "requiresReview": True}
                     for item in measurement_estimates["measurements"]
@@ -629,7 +698,8 @@ async def turn_video(
             }
         elif measurement_estimate_error:
             record["measurementEstimateError"] = measurement_estimate_error
-        record.update(persist_analysis(
+        record.update(await asyncio.to_thread(
+            persist_analysis,
             user=user, session_id=capture_session_id, view="turn", data=data,
             content_type=file.content_type or "application/octet-stream", record=record,
             duration_seconds=duration,

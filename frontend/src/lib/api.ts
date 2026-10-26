@@ -38,9 +38,9 @@ export async function submitQualityCheck(
 
   let response: Response
   try {
-    response = await fetchFn(apiUrl('/api/quality'), {
-      method: 'POST', body: form, headers: await authorization(),
-    })
+    response = fetchFn === fetch
+      ? await authenticatedFetch('/api/quality', { method: 'POST', body: form })
+      : await fetchFn(apiUrl('/api/quality'), { method: 'POST', body: form, headers: await authorization() })
   } catch {
     throw networkError('/api/quality')
   }
@@ -154,6 +154,7 @@ export async function deleteCaptureSession(sessionId: string): Promise<void> {
 /** POST a slow-turn video to the service and return its review decision. */
 export async function submitTurnVideoCheck(
   file: File, consent: boolean, sessionId?: string, heightMm?: number, trainingConsent = false,
+  calibration?: { kind: CalibrationKind; file: File },
 ): Promise<VideoDecision> {
   const form = new FormData()
   form.append('consent', String(consent))
@@ -161,6 +162,10 @@ export async function submitTurnVideoCheck(
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
   form.append('training_consent', String(trainingConsent))
+  if (calibration) {
+    form.append('calibration_kind', calibration.kind)
+    form.append('calibration_reference', calibration.file)
+  }
 
   let response: Response
   try {
@@ -185,8 +190,7 @@ export async function signUp(name: string, email: string, password: string): Pro
 }
 
 export async function loadAuthSession(): Promise<AuthSession> {
-  const token = await bearerToken()
-  const response = await fetch(apiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${token}` } })
+  const response = await authenticatedFetch('/api/auth/me', {})
   if (!response.ok) throw new Error('Could not load your VisionFit account.')
   return { user: await response.json() }
 }
@@ -202,7 +206,7 @@ export async function getMeasurementDefinitions(): Promise<MeasurementDefinition
 }
 
 export async function getMeasurementPaths(): Promise<MeasurementPathDto[]> {
-  const response = await fetch(apiUrl('/api/admin/measurement-paths'), { headers: await authorization() })
+  const response = await authenticatedFetch('/api/admin/measurement-paths', {})
   if (!response.ok) throw new Error(`Could not load measurement paths: ${await response.text()}`)
   return (await response.json()).paths
 }
@@ -211,8 +215,8 @@ export async function saveMeasurementPathDraft(
   key: string,
   path: Pick<MeasurementPathDto, 'path' | 'closed' | 'orderedPoints' | 'segmentViews' | 'requiredViews' | 'calculationMethod'>,
 ): Promise<MeasurementPathDto> {
-  const response = await fetch(apiUrl(`/api/admin/measurement-paths/${key}/draft`), {
-    method: 'PUT', headers: { 'Content-Type': 'application/json', ...(await authorization()) },
+  const response = await authenticatedFetch(`/api/admin/measurement-paths/${key}/draft`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       path: path.path, closed: path.closed, ordered_points: path.orderedPoints,
       segment_views: path.segmentViews,
@@ -224,17 +228,17 @@ export async function saveMeasurementPathDraft(
 }
 
 export async function publishMeasurementPath(key: string): Promise<MeasurementPathDto> {
-  const response = await fetch(apiUrl(`/api/admin/measurement-paths/${key}/publish`), {
-    method: 'POST', headers: await authorization(),
+  const response = await authenticatedFetch(`/api/admin/measurement-paths/${key}/publish`, {
+    method: 'POST',
   })
   if (!response.ok) throw new Error(`Could not publish path: ${await response.text()}`)
   return await response.json()
 }
 
 export async function createMeasurementTable(subjectId: string, captureSessionId?: string, _token?: string): Promise<MeasurementTableDto> {
-  const response = await fetch(apiUrl('/api/measurement-tables'), {
+  const response = await authenticatedFetch('/api/measurement-tables', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authorization()) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ subject_id: subjectId, capture_session_id: captureSessionId, unit: 'cm' }),
   })
   if (!response.ok) {
@@ -245,39 +249,37 @@ export async function createMeasurementTable(subjectId: string, captureSessionId
 }
 
 export async function getCustomers(): Promise<CustomerDto[]> {
-  const response = await fetch(apiUrl('/api/admin/customers'), { headers: await authorization() })
+  const response = await authenticatedFetch('/api/admin/customers', {})
   if (!response.ok) throw new Error('Could not load customers.')
   return (await response.json()).customers
 }
 
 export async function getAnalysisDecisions(): Promise<AnalysisDecisionDto[]> {
-  const response = await fetch(apiUrl('/api/decisions?limit=20'), { headers: await authorization() })
+  const response = await authenticatedFetch('/api/decisions?limit=20', {})
   if (!response.ok) throw new Error('Could not load capture analyses.')
   return (await response.json()).records
 }
 
 export async function getCaptureSessions(): Promise<CaptureSessionSummaryDto[]> {
-  const response = await fetch(apiUrl('/api/admin/capture-sessions'), { headers: await authorization() })
+  const response = await authenticatedFetch('/api/admin/capture-sessions', {})
   if (!response.ok) throw new Error('Could not load capture sessions.')
   return (await response.json()).sessions
 }
 
 export async function getCaptureSession(sessionId: string): Promise<CaptureSessionDetailDto> {
-  const response = await fetch(apiUrl(`/api/admin/capture-sessions/${sessionId}`), { headers: await authorization() })
+  const response = await authenticatedFetch(`/api/admin/capture-sessions/${sessionId}`, {})
   if (!response.ok) throw new Error('Could not load capture evidence.')
   return await response.json()
 }
 
 export async function getMeasurementAnalysis(sessionId: string): Promise<MeasurementReadinessDto> {
-  const response = await fetch(apiUrl(`/api/admin/capture-sessions/${sessionId}/measurement-analysis`), { headers: await authorization() })
+  const response = await authenticatedFetch(`/api/admin/capture-sessions/${sessionId}/measurement-analysis`, {})
   if (!response.ok) throw new Error('Could not load measurement analysis.')
   return await response.json()
 }
 
 export async function getCaptureMeasurementTable(sessionId: string): Promise<MeasurementTableDto | null> {
-  const response = await fetch(apiUrl(`/api/admin/capture-sessions/${sessionId}/measurement-table`), {
-    headers: await authorization(),
-  })
+  const response = await authenticatedFetch(`/api/admin/capture-sessions/${sessionId}/measurement-table`, {})
   if (!response.ok) throw new Error('Could not load the linked measurement table.')
   return await response.json()
 }
@@ -290,9 +292,9 @@ export async function updateMeasurementValue(
   sourceViews: string[],
   confidence?: number,
 ): Promise<MeasurementTableDto> {
-  const response = await fetch(apiUrl(`/api/measurement-tables/${tableId}/measurements/${key}?unit=cm`), {
+  const response = await authenticatedFetch(`/api/measurement-tables/${tableId}/measurements/${key}?unit=cm`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...(await authorization()) },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       value,
       unit: 'cm',
