@@ -61,6 +61,24 @@ cd visionfit/service
   --manifest ../../dataset-training/subjects.csv
 ```
 
+## Training data provenance
+
+The dataset mixes three image sources; each has different consent and quality implications:
+
+- **Blender renders** (mannequin) — no consent required; geometrically consistent and fully
+  controllable. Good for seeding complete, reproducible labels.
+- **Real photographs** — most valuable for generalization and for the final accuracy
+  validation. They depict a person, so they require that person's consent (the owner's own
+  photos are fine; photos of others need their permission).
+- **AI-generated images** — no consent required, but use with care: generated bodies can be
+  anatomically inconsistent (wrong proportions, impossible geometry), which corrupts the
+  keypoint-to-measurement relationship this app depends on. Use them for volume only, never
+  as the basis for accuracy claims.
+
+Whichever source you use, the final measurement-accuracy validation still requires the
+documented five consenting adults versus professional tape measurements. Synthetic and
+AI-generated images are training data, not the held-out validation of real-world accuracy.
+
 ## Segmentation annotation and its limited role
 
 Label the visible body/clothing silhouette as a single instance. It is used for capture evidence and

@@ -12,6 +12,8 @@
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/004_tailoring_keypoint_paths.sql
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/005_archive_underbust_circumference.sql
    psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/006_runtime_integrity.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/007_training_consent.sql
+   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f migrations/008_external_vision_consent.sql
    ```
 
 The schema stores structured data and private object-storage references. Body images and videos
@@ -21,3 +23,8 @@ VisionFit uses Neon Auth. The browser receives only the Neon Auth URL; the backe
 tokens through `NEON_AUTH_JWKS_URL`, resolves `app_users`, and enforces the `admin` role. Configure
 `VISIONFIT_BOOTSTRAP_ADMIN_EMAILS` before the first admin signs in. The Neon owner connection string
 must never reach the browser.
+
+Capture sessions and their linked measurement tables are removed after 30 days without activity
+by default (`VISIONFIT_RETENTION_DAYS`). Users can also delete a capture session immediately from
+the capture review screen. Each deletion removes the private object-storage files before deleting
+the associated database records; a failed object deletion leaves the session available for retry.

@@ -57,15 +57,16 @@ cd visionfit/service
 Endpoints:
 
 - `GET  /api/health` — service + OpenCV version.
-- `POST /api/quality` — multipart form: `view` (`front`|`side`) + `file` (image).
-  Returns a decision record (VF-0, exposure + blur only).
+- `POST /api/quality` — authenticated multipart form: `view` (`front`|`side`) + `consent` + `file`
+  (image). Returns a decision record (VF-0, exposure + blur only; 20 MiB limit).
 - `POST /api/capture` — authenticated multipart form: `view` + `consent` + `file`. Consent-gated
   exposure/blur, contrast-silhouette framing, cord candidate and pose-landmark
   posture evidence (VF-2).
 - `POST /api/turn-video` — authenticated multipart form: `consent` + `file` (video). Duration,
   sampled exposure/blur and pose-orientation turn coverage (VF-2).
 - `POST /api/measurement-estimates` — authenticated multipart form: `consent`, `height_mm`,
-  `front`, `side`, and `back`. Runs the tailoring-keypoint workflow, executes each published
+  `external_vision_consent`, `front`, `side`, and `back`. Runs the tailoring-keypoint workflow only
+  when the customer separately consents to Roboflow processing, executes each published
   ordered path, and returns segment evidence, confidence, blocked paths, and a targeted review
   action. With `session_id`, it reuses stored keypoints and persists candidates into the linked
   measurement table. It does not use silhouette labels as measurement points.
@@ -78,6 +79,8 @@ Endpoints:
 - `PUT  /api/admin/measurement-paths/{key}/draft` — create or update an admin path draft.
 - `POST /api/admin/measurement-paths/{key}/publish` — publish an immutable path version; existing
   measurement-table rows retain their original definition version.
+- `DELETE /api/capture-sessions/{id}` — remove the authenticated caller's photos, analysis data and
+  linked measurement table.
 
 ## Test
 
@@ -96,6 +99,8 @@ cd visionfit/service
   `unknown` and request review.
 - Capture metadata, analyses, landmarks, and measurement tables are stored in Neon Postgres.
   Capture binaries are private Neon Object Storage objects; Postgres stores object keys and metadata.
+- Capture sessions and linked measurement tables are automatically deleted after 30 inactive days
+  by default (`VISIONFIT_RETENTION_DAYS=30`), or sooner through the authenticated delete endpoint.
 - Values are stored canonically in millimetres; estimated values require confidence and admin review.
 
 ## VF-3 calibration training

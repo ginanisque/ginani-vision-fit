@@ -16,6 +16,10 @@ const faqs = [
     answer: 'No. Captures are stored in private object storage and associated with your authenticated account. They are used for the measurement workflow you consent to.',
   },
   {
+    question: 'Are my photos sent to another service?',
+    answer: 'Only if you separately opt in to Roboflow keypoint detection. Without that opt-in, VisionFit does not send your photos to Roboflow and does not run keypoint-based measurement inference.',
+  },
+  {
     question: 'Does VisionFit replace a professional fitting?',
     answer: 'No. VisionFit assists capture and measurement analysis. A trained reviewer may correct landmarks, request a new capture, or verify measurements before they are used for garment construction.',
   },
@@ -84,7 +88,7 @@ export function LandingPage({ onStart }: LandingPageProps) {
           <h2>Your body data deserves careful handling.</h2>
         </div>
         <div>
-          <p>VisionFit requires sign-in and explicit capture consent. Images and video are kept in private storage, while database records hold controlled references and analysis metadata.</p>
+          <p>VisionFit requires sign-in and explicit capture consent. Images and video are kept in private storage, while database records hold controlled references and analysis metadata. Keypoint detection uses Roboflow only after a separate opt-in; captures and linked measurement results are deleted after 30 inactive days by default.</p>
           <p className="fine-print">Only submit images of yourself, or of a person who has knowingly consented. Measurement output is an estimate until it has been reviewed.</p>
         </div>
       </section>

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
@@ -12,8 +14,13 @@ from .database import connection
 from .settings import get_settings
 from .storage import delete_private, put_private, signed_download_url
 
+logger = logging.getLogger(__name__)
 
-def ensure_session(user: SessionUser, session_id: str | None, height_mm: float | None = None) -> UUID:
+
+def ensure_session(
+    user: SessionUser, session_id: str | None, height_mm: float | None = None,
+    training_consent: bool = False, external_vision_consent: bool | None = None,
+) -> UUID:
     if height_mm is not None and not 1000 <= height_mm <= 2500:
         raise ValueError("Height must be between 1000 and 2500 mm")
     with connection() as conn:
@@ -26,14 +33,82 @@ def ensure_session(user: SessionUser, session_id: str | None, height_mm: float |
                 raise PermissionError("Capture session not found for this customer")
             if height_mm is not None:
                 conn.execute("update capture_sessions set height_mm = %s where id = %s", (height_mm, row["id"]))
+            if training_consent:
+                conn.execute("update capture_sessions set training_consent = true where id = %s", (row["id"],))
+            if external_vision_consent is not None:
+                conn.execute(
+                    "update capture_sessions set external_vision_consent = %s, "
+                    "consent_version = 'visionfit-v3' where id = %s",
+                    (external_vision_consent, row["id"]),
+                )
             return row["id"]
         row = conn.execute(
             """insert into capture_sessions
-                    (customer_id, created_by, height_mm, consented_at, consent_version, status)
-                 values (%s, %s, %s, now(), 'visionfit-v1', 'processing') returning id""",
-            (user.id, user.id, height_mm),
+                    (customer_id, created_by, height_mm, consented_at, consent_version,
+                     training_consent, external_vision_consent, status)
+                 values (%s, %s, %s, now(), 'visionfit-v3', %s, %s, 'processing') returning id""",
+            (user.id, user.id, height_mm, training_consent, bool(external_vision_consent)),
         ).fetchone()
         return row["id"]
+
+
+def delete_capture_session(
+    session_id: str, *, owner_id: UUID | None = None, older_than: datetime | None = None,
+) -> dict | None:
+    """Delete one session, associated measurements, and private capture objects."""
+    conditions = ["id = %s"]
+    params: list[object] = [session_id]
+    if owner_id is not None:
+        conditions.append("customer_id = %s")
+        params.append(owner_id)
+    if older_than is not None:
+        conditions.append("updated_at < %s")
+        params.append(older_than)
+    where = " and ".join(conditions)
+
+    with connection() as conn:
+        session = conn.execute(
+            f"select id from capture_sessions where {where} for update", params,
+        ).fetchone()
+        if session is None:
+            return None
+        assets = conn.execute(
+            "select storage_key from capture_assets where session_id = %s",
+            (session["id"],),
+        ).fetchall()
+        for asset in assets:
+            delete_private(asset["storage_key"])
+        deleted_tables = conn.execute(
+            f"delete from measurement_tables where capture_session_id = %s "
+            f"and exists (select 1 from capture_sessions where {where})",
+            [session["id"], *params],
+        ).rowcount
+        deleted = conn.execute(
+            f"delete from capture_sessions where {where} returning id", params,
+        ).fetchone()
+        if deleted is None:
+            return None
+    return {"assetsDeleted": len(assets), "measurementTablesDeleted": deleted_tables}
+
+
+def purge_expired_capture_sessions(retention_days: int) -> int:
+    """Remove sessions inactive beyond the configured retention period."""
+    with connection() as conn:
+        expired = conn.execute(
+            "select id, customer_id from capture_sessions "
+            "where updated_at < now() - (%s * interval '1 day') order by updated_at",
+            (retention_days,),
+        ).fetchall()
+    removed = 0
+    for row in expired:
+        result = delete_capture_session(
+            str(row["id"]), owner_id=row["customer_id"],
+            older_than=datetime.now(timezone.utc) - timedelta(days=retention_days),
+        )
+        if result is not None:
+            removed += 1
+    logger.info("Purged %d expired VisionFit capture sessions", removed)
+    return removed
 
 
 def persist_analysis(
@@ -185,7 +260,8 @@ def admin_capture_session(session_id: str) -> dict | None:
         session = conn.execute(
             """select cs.id, cs.customer_id, u.email, u.display_name, u.role::text,
                       cs.height_mm, cs.status::text, cs.consented_at, cs.consent_version,
-                      cs.notes, cs.created_at, cs.updated_at
+                      cs.training_consent, cs.external_vision_consent, cs.notes,
+                      cs.created_at, cs.updated_at
                  from capture_sessions cs join app_users u on u.id = cs.customer_id
                 where cs.id = %s""",
             (session_id,),
@@ -218,7 +294,8 @@ def admin_capture_session(session_id: str) -> dict | None:
         "customerRole": session["role"],
         "heightMm": None if session["height_mm"] is None else float(session["height_mm"]),
         "status": session["status"], "consentedAt": session["consented_at"].isoformat() if session["consented_at"] else None,
-        "consentVersion": session["consent_version"], "notes": session["notes"],
+        "consentVersion": session["consent_version"], "trainingConsent": session["training_consent"],
+        "externalVisionConsent": session["external_vision_consent"], "notes": session["notes"],
         "createdAt": session["created_at"].isoformat(), "updatedAt": session["updated_at"].isoformat(),
         "assets": [
             {

@@ -17,6 +17,10 @@ playwright-report/
 *.md
 !README.md
 !**/README.md
+!docs/ARCHITECTURE.md
+!docs/TECHNICAL_REPORT.md
+!docs/EVALUATION.md
+!deploy/DEPLOY_CHECKLIST.md
 dataset-training/
 *.zip
 

@@ -27,18 +27,20 @@ function networkError(path: string): Error {
 
 /** POST one image (front or side) to the quality service and return its decision. */
 export async function submitQualityCheck(
-  image: File,
-  view: 'front' | 'side',
+  image: File, view: 'front' | 'side', consent: boolean,
   options: SubmitOptions = {},
 ): Promise<QualityDecision> {
   const fetchFn = options.fetchFn ?? fetch
   const form = new FormData()
   form.append('view', view)
+  form.append('consent', String(consent))
   form.append('file', image)
 
   let response: Response
   try {
-    response = await fetchFn(apiUrl('/api/quality'), { method: 'POST', body: form })
+    response = await fetchFn(apiUrl('/api/quality'), {
+      method: 'POST', body: form, headers: await authorization(),
+    })
   } catch {
     throw networkError('/api/quality')
   }
@@ -64,12 +66,14 @@ async function authenticatedFetch(path: string, init: RequestInit): Promise<Resp
 }
 
 export async function submitCaptureCheck(
-  image: File, view: 'front' | 'side' | 'back', consent: boolean,
-  sessionId?: string, heightMm?: number,
+  image: File, view: 'front' | 'side' | 'back', consent: boolean, trainingConsent: boolean,
+  externalVisionConsent: boolean, sessionId?: string, heightMm?: number,
 ): Promise<QualityDecision> {
   const form = new FormData()
   form.append('view', view)
   form.append('consent', String(consent))
+  form.append('training_consent', String(trainingConsent))
+  form.append('external_vision_consent', String(externalVisionConsent))
   form.append('file', image)
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
@@ -85,13 +89,17 @@ export async function submitCaptureCheck(
 }
 
 export async function submitCaptureBatch(
-  front: File, side: File, back: File, consent: boolean, sessionId?: string, heightMm?: number,
+  front: File, side: File, back: File, consent: boolean, trainingConsent: boolean,
+  externalVisionConsent: boolean,
+  sessionId?: string, heightMm?: number,
 ): Promise<{ captureSessionId: string; results: QualityDecision[] }> {
   const form = new FormData()
   form.append('front', front)
   form.append('side', side)
   form.append('back', back)
   form.append('consent', String(consent))
+  form.append('training_consent', String(trainingConsent))
+  form.append('external_vision_consent', String(externalVisionConsent))
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
   let response: Response
@@ -105,7 +113,8 @@ export async function submitCaptureBatch(
 }
 
 export async function submitMeasurementEstimate(
-  front: File, side: File, back: File, heightMm: number, consent: boolean, sessionId?: string,
+  front: File, side: File, back: File, heightMm: number, consent: boolean,
+  externalVisionConsent: boolean, sessionId?: string,
   calibration?: { kind: CalibrationKind; file: File },
 ): Promise<CircumferenceEstimate> {
   const form = new FormData()
@@ -114,6 +123,7 @@ export async function submitMeasurementEstimate(
   form.append('back', back)
   form.append('height_mm', String(heightMm))
   form.append('consent', String(consent))
+  form.append('external_vision_consent', String(externalVisionConsent))
   if (sessionId) form.append('session_id', sessionId)
   if (calibration) {
     form.append('calibration_kind', calibration.kind)
@@ -127,6 +137,18 @@ export async function submitMeasurementEstimate(
   }
   if (!response.ok) throw new Error(`Measurement estimate failed (${response.status}): ${await response.text()}`)
   return await response.json()
+}
+
+export async function deleteCaptureSession(sessionId: string): Promise<void> {
+  let response: Response
+  try {
+    response = await authenticatedFetch(`/api/capture-sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    })
+  } catch {
+    throw networkError('/api/capture-sessions')
+  }
+  if (!response.ok) throw new Error(`Capture deletion failed (${response.status}): ${await response.text()}`)
 }
 
 /** POST a slow-turn video to the service and return its review decision. */

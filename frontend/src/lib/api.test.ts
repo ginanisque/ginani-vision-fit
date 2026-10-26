@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QualityDecision, VideoDecision } from '../types'
-import { submitMeasurementEstimate, submitQualityCheck, submitTurnVideoCheck } from './api'
+import { deleteCaptureSession, submitMeasurementEstimate, submitQualityCheck, submitTurnVideoCheck } from './api'
 import { bearerToken } from './auth-client'
 
 const decision: QualityDecision = {
@@ -43,22 +43,24 @@ describe('submitQualityCheck', () => {
     const fetchFn = vi.fn().mockResolvedValue(fakeResponse(decision))
     const file = new File(['fake'], 'front.png', { type: 'image/png' })
 
-    const result = await submitQualityCheck(file, 'front', { fetchFn })
+    const result = await submitQualityCheck(file, 'front', true, { fetchFn })
 
     expect(result).toEqual(decision)
     expect(fetchFn).toHaveBeenCalledWith(
       '/api/quality',
       expect.objectContaining({ method: 'POST' }),
     )
+    expect(fetchFn.mock.calls[0][1].headers).toHaveProperty('Authorization')
     const body = fetchFn.mock.calls[0][1].body as FormData
     expect(body.get('view')).toBe('front')
+    expect(body.get('consent')).toBe('true')
     expect(body.get('file')).toBe(file)
   })
 
   it('throws on a non-ok response', async () => {
     const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ detail: 'bad' }, false, 400))
     await expect(
-      submitQualityCheck(new File(['x'], 'a.png', { type: 'image/png' }), 'front', { fetchFn }),
+      submitQualityCheck(new File(['x'], 'a.png', { type: 'image/png' }), 'front', true, { fetchFn }),
     ).rejects.toThrow(/Quality check failed/)
   })
 })
@@ -139,8 +141,22 @@ describe('submitMeasurementEstimate', () => {
     const back = new File(['back'], 'back.png', { type: 'image/png' })
     const reference = new File(['a4'], 'a4.png', { type: 'image/png' })
 
-    await submitMeasurementEstimate(front, side, back, 1650, true, 'session-1', {
+    await submitMeasurementEstimate(front, side, back, 1650, true, true, 'session-1', {
       kind: 'a4', file: reference,
+    })
+
+    describe('deleteCaptureSession', () => {
+      it('sends an authenticated delete request for the selected capture', async () => {
+        const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ deleted: true }))
+        vi.stubGlobal('fetch', fetchFn)
+
+        await deleteCaptureSession('session-1')
+
+        expect(fetchFn).toHaveBeenCalledWith('/api/capture-sessions/session-1', expect.objectContaining({
+          method: 'DELETE',
+          headers: { Authorization: '******' },
+        }))
+      })
     })
 
     expect(bearerToken).toHaveBeenCalledOnce()
@@ -148,6 +164,7 @@ describe('submitMeasurementEstimate', () => {
     expect(request.headers).toEqual({ Authorization: 'Bearer api-test-token' })
     const body = request.body as FormData
     expect(body.get('front')).toBe(front)
+    expect(body.get('external_vision_consent')).toBe('true')
     expect(body.get('calibration_kind')).toBe('a4')
     expect(body.get('calibration_reference')).toBe(reference)
   })

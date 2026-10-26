@@ -93,6 +93,8 @@ export interface CaptureAssetDto {
 export interface CaptureSessionDetailDto extends CaptureSessionSummaryDto {
   notes: string
   consentVersion: string | null
+  trainingConsent: boolean
+  externalVisionConsent: boolean
   assets: CaptureAssetDto[]
   analysisRuns: Array<{
     id: string
@@ -150,6 +152,9 @@ export type Step = 'consent' | 'height' | 'calibration' | 'front' | 'side' | 'ba
 export interface ConsentState {
   agreed: boolean
   acknowledged: boolean
+  externalVision: boolean
+  /** Optional opt-in to allow captures to be used to train the measurement model. */
+  training: boolean
 }
 
 export interface EvidenceBox {

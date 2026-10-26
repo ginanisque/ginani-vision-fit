@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AuthSession, CalibrationKind, CircumferenceEstimate, ConsentState, HeightUnit, QualityDecision, Step } from './types'
-import { loadAuthSession, logout, submitCaptureBatch, submitMeasurementEstimate } from './lib/api'
+import { deleteCaptureSession, loadAuthSession, logout, submitCaptureBatch, submitMeasurementEstimate } from './lib/api'
 import { validateHeight } from './lib/flow'
 import { ConsentStep } from './components/ConsentStep'
 import { HeightStep } from './components/HeightStep'
@@ -23,7 +23,9 @@ export default function App() {
   const [page, setPage] = useState<'home' | 'capture' | 'admin'>('home')
   const [showLogin, setShowLogin] = useState(false)
   const [step, setStep] = useState<Step>('consent')
-  const [consent, setConsent] = useState<ConsentState>({ agreed: false, acknowledged: false })
+  const [consent, setConsent] = useState<ConsentState>({
+    agreed: false, acknowledged: false, externalVision: false, training: false,
+  })
   const [height, setHeight] = useState<{ value: string; unit: HeightUnit }>({ value: '', unit: 'cm' })
   const [front, setFront] = useState<ImageSlot>({ file: null, preview: null })
   const [side, setSide] = useState<ImageSlot>({ file: null, preview: null })
@@ -69,19 +71,20 @@ export default function App() {
     const numericHeight = Number(height.value) * (height.unit === 'in' ? 25.4 : 10)
     try {
       const batch = await submitCaptureBatch(
-        front.file, side.file, back.file, consent.agreed && consent.acknowledged,
-        activeSessionId, numericHeight,
+        front.file, side.file, back.file, consent.agreed && consent.acknowledged, consent.training,
+        consent.externalVision, activeSessionId, numericHeight,
       )
       next = batch.results
       activeSessionId = batch.captureSessionId
       setCaptureSessionId(activeSessionId)
       setLastRun(next)
       setLog((prev) => [...prev, ...next])
-      if (next.length === 3 && next.every((result) => result.decision !== 'recapture')) {
+      if (consent.externalVision && next.length === 3 && next.every((result) => result.decision !== 'recapture')) {
         try {
           setMeasurementEstimate(await submitMeasurementEstimate(
             front.file, side.file, back.file, numericHeight, consent.agreed && consent.acknowledged,
-            activeSessionId, calibrationKind && calibration.file ? { kind: calibrationKind, file: calibration.file } : undefined,
+            consent.externalVision, activeSessionId,
+            calibrationKind && calibration.file ? { kind: calibrationKind, file: calibration.file } : undefined,
           ))
         } catch (estimateError) {
           setError(estimateError instanceof Error ? estimateError.message : String(estimateError))
@@ -98,6 +101,35 @@ export default function App() {
     setLastRun([])
     setError(null)
     setStep(view)
+  }
+
+  const deleteCaptureData = async () => {
+    if (!captureSessionId || !window.confirm(
+      'Delete these capture photos, videos, analysis evidence, and linked measurement results? This cannot be undone.',
+    )) return
+    setChecking(true)
+    setError(null)
+    try {
+      await deleteCaptureSession(captureSessionId)
+      for (const preview of [front.preview, side.preview, back.preview, calibration.preview]) {
+        if (preview) URL.revokeObjectURL(preview)
+      }
+      setCaptureSessionId(undefined)
+      setFront({ file: null, preview: null })
+      setSide({ file: null, preview: null })
+      setBack({ file: null, preview: null })
+      setCalibration({ file: null, preview: null })
+      setCalibrationKind(null)
+      setLastRun([])
+      setLog([])
+      setMeasurementEstimate(null)
+      setConsent({ agreed: false, acknowledged: false, externalVision: false, training: false })
+      setStep('consent')
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError))
+    } finally {
+      setChecking(false)
+    }
   }
 
   const authenticated = (next: AuthSession) => {
@@ -199,6 +231,8 @@ export default function App() {
             checking={checking}
             error={error}
             measurementEstimate={measurementEstimate}
+            captureSessionId={captureSessionId}
+            onDelete={deleteCaptureData}
             onCheck={runChecks}
             onRetake={retake}
           />

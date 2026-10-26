@@ -8,9 +8,14 @@ interface Props {
   onCheck: () => void
   onRetake: (view: 'front' | 'side' | 'back') => void
   measurementEstimate?: CircumferenceEstimate | null
+  captureSessionId?: string
+  onDelete?: () => void
 }
 
-export function QualityResult({ results, checking, error, onCheck, onRetake, previews, measurementEstimate }: Props) {
+export function QualityResult({
+  results, checking, error, onCheck, onRetake, previews, measurementEstimate,
+  captureSessionId, onDelete,
+}: Props) {
   if (results.length === 0) {
     return (
       <section className="step">
@@ -93,6 +98,10 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
         </p>
       ) : measurementEstimate ? <p className="muted">Capture evidence requires review; estimates remain unapproved.</p> : null}
 
+      {!measurementEstimate && canEstimate && (
+        <p className="muted">Keypoint measurement inference was not run. Opt in to Roboflow processing on the consent screen to request an estimate.</p>
+      )}
+
       {measurementEstimate && <section className="estimate-panel" aria-label="Measurement estimates">
         <h2>Measurement estimates — review required</h2>
         <div className="measurement-grid">
@@ -110,7 +119,7 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
           <p className="error">The reference could not be used ({measurementEstimate.calibration.reason}); front scale fell back to height.</p>}
         {measurementEstimate.measurementTableId &&
           <p className="success">Saved to the linked measurement table for admin review.</p>}
-        <p className="muted">Detected views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>
+        <p className="muted">Submitted views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>
         {!!measurementEstimate.blockedMeasurements?.length && <div className="blocked-measurements">
           <h3>Blocked measurements</h3>
           <ul>{measurementEstimate.blockedMeasurements.map(item => <li key={item.key}><strong>{item.displayName}</strong>: missing {item.missingSegments.map(segment => `${segment.from} → ${segment.to} (${segment.view})`).join(', ')}</li>)}</ul>
@@ -131,6 +140,9 @@ export function QualityResult({ results, checking, error, onCheck, onRetake, pre
 
       {error && <p role="alert" className="error">{error}</p>}
       <button className="secondary" disabled={checking} onClick={onCheck}>{checking ? 'Checking…' : 'Recheck captures'}</button>
+      {captureSessionId && onDelete && (
+        <button className="secondary" disabled={checking} onClick={onDelete}>Delete my capture data</button>
+      )}
       <p className="muted">
         Cyan shows a contrast silhouette candidate; yellow shows a possible waist cord. These are not anatomical landmarks.
       </p>

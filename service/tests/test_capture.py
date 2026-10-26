@@ -3,6 +3,7 @@ import asyncio
 import numpy as np
 import pytest
 from uuid import uuid4
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from app.capture import capture_decision
 from app.auth import SessionUser, current_user
@@ -103,6 +104,33 @@ def test_capture_is_recorded():
         assert r.json()['analysisRunId']
 
 
+def test_capture_runs_keypoint_workflow_only_after_explicit_opt_in(monkeypatch):
+    import app.main as main_module
+    calls = []
+    monkeypatch.setattr(main_module, "capture_decision", lambda view, image, _data: {
+        "id": "capture-test", "view": view, "decision": "review",
+        "dimensions": {"width": image.shape[1], "height": image.shape[0]},
+        "evidence": [], "reasons": [],
+    })
+    monkeypatch.setattr(main_module, "analyze_keypoint_capture", lambda _data: (
+        calls.append(True) or {
+            "status": "complete", "keypointWorkflow": "test-workflow",
+            "output": [{"name": "bust_point_left", "x": 150, "y": 250, "confidence": .95}],
+        }
+    ))
+    with TestClient(app) as c:
+        response = c.post(
+            "/api/capture",
+            data={"view": "front", "consent": "true", "external_vision_consent": "true"},
+            files={"file": ("photo.png", encoded(subject()))},
+        )
+    assert response.status_code == 200
+    assert calls == [True]
+    body = response.json()
+    assert body["measurementVision"]["status"] == "complete"
+    assert any(item["kind"] == "tailoring-keypoint" for item in body["evidence"])
+
+
 def test_capture_batch_uses_one_session_for_all_views(monkeypatch):
     import app.main as main_module
     monkeypatch.setattr(main_module, 'capture_decision', lambda view, image, _data: {
@@ -110,9 +138,10 @@ def test_capture_batch_uses_one_session_for_all_views(monkeypatch):
         'dimensions': {'width': image.shape[1], 'height': image.shape[0]},
         'evidence': [], 'reasons': [],
     })
-    monkeypatch.setattr(main_module, 'analyze_measurement_capture', lambda _data: {
-        'status': 'disabled', 'models': {},
-    })
+    monkeypatch.setattr(
+        main_module, 'analyze_keypoint_capture',
+        lambda _data: pytest.fail("keypoint inference must not run without provider consent"),
+    )
     image = encoded(subject())
     with TestClient(app) as c:
         r = c.post('/api/captures', data={'consent': 'true', 'height_mm': '1650'}, files={
@@ -123,6 +152,7 @@ def test_capture_batch_uses_one_session_for_all_views(monkeypatch):
     assert len(body['results']) == 3
     assert [item['view'] for item in body['results']] == ['front', 'side', 'back']
     assert {item['captureSessionId'] for item in body['results']} == {body['captureSessionId']}
+    assert all(item['measurementVision']['status'] == 'not_consented' for item in body['results'])
 
 
 def test_measurement_runtime_executes_published_keypoint_order(monkeypatch):
@@ -143,12 +173,29 @@ def test_measurement_runtime_executes_published_keypoint_order(monkeypatch):
     image = encoded(subject())
     user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
     body = asyncio.run(main_module.measurement_estimates(
-        True, 1650, None, uploaded('front.png', image), uploaded('side.png', image),
+        True, 1650, True, None, uploaded('front.png', image), uploaded('side.png', image),
         uploaded('back.png', image), user,
     ))
     assert body['method'] == 'published ordered tailoring-keypoint paths + calibration profile'
     assert body['measurements'][0]['orderedPoints'] == names
     assert body['measurements'][0]['pathVersion'] == 2
+
+
+def test_measurement_inference_requires_separate_provider_consent(monkeypatch):
+    import app.main as main_module
+    monkeypatch.setattr(main_module, "roboflow_status", lambda: {"keypointsReady": True})
+    monkeypatch.setattr(
+        main_module, "analyze_keypoint_capture",
+        lambda _data: pytest.fail("must not send a photo without provider consent"),
+    )
+    image = encoded(subject())
+    user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(main_module.measurement_estimates(
+            True, 1650, False, None, uploaded('front.png', image), uploaded('side.png', image),
+            uploaded('back.png', image), user,
+        ))
+    assert rejected.value.status_code == 403
 
 
 def test_measurement_runtime_reuses_session_points_calibrates_and_persists(monkeypatch):
@@ -178,7 +225,7 @@ def test_measurement_runtime_reuses_session_points_calibrates_and_persists(monke
     image = encoded(subject())
     user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
     body = asyncio.run(main_module.measurement_estimates(
-        True, 1650, str(uuid4()), uploaded('front.png', image), uploaded('side.png', image),
+        True, 1650, True, str(uuid4()), uploaded('front.png', image), uploaded('side.png', image),
         uploaded('back.png', image), user,
     ))
     assert body['modelVersion'] == 'calibrated-test'

@@ -111,7 +111,7 @@ export function AdminPanel() {
         {sessionDetail && <>
           <div className="capture-summary">
             <div><span>Person</span><strong>{sessionDetail.customerName || sessionDetail.customerEmail}</strong><small>{sessionDetail.customerEmail} · {sessionDetail.customerRole}</small></div>
-            <div><span>Captured</span><strong>{new Date(sessionDetail.createdAt).toLocaleString()}</strong><small>{sessionDetail.consentVersion || 'Consent version unavailable'}</small></div>
+            <div><span>Captured</span><strong>{new Date(sessionDetail.createdAt).toLocaleString()}</strong><small>{sessionDetail.consentVersion || 'Consent version unavailable'}{sessionDetail.trainingConsent ? ' · training consent' : ''}</small></div>
             <div><span>Height</span><strong>{sessionDetail.heightMm ? `${sessionDetail.heightMm / 10} cm` : 'Missing'}</strong><small>{sessionDetail.assets.length} asset{sessionDetail.assets.length === 1 ? '' : 's'}</small></div>
           </div>
           <div className="capture-assets">

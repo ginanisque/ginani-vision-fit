@@ -57,7 +57,7 @@ ARN after its ID is known.
 Configure these in Amplify Hosting under **App settings → Environment variables**:
 
 ```text
-VITE_VISIONFIT_API_URL=https://YOUR_ECS_SERVICE_HOST
+VITE_VISIONFIT_API_URL=https://gi-4bffebb94e7c42ebaa6094d36fde44ad.ecs.us-east-1.on.aws
 VITE_NEON_AUTH_URL=https://YOUR_NEON_AUTH_HOST
 ```
 

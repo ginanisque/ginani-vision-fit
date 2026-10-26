@@ -1,9 +1,14 @@
 """VisionFit OpenCV service with Neon persistence, Auth, and private storage."""
 from __future__ import annotations
 
+import asyncio
 import cv2
+import logging
 import numpy as np
 import os
+from contextlib import asynccontextmanager
+from typing import Annotated
+
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,16 +17,66 @@ from .decisions import DecisionLog, build_decision
 from .posture import estimate_pose, load_pose, view_orientation
 from .auth import SessionUser, current_user, require_admin, router as auth_router
 from .capture_store import (
-    admin_capture_session, admin_capture_sessions, ensure_session, persist_analysis, recent_decisions,
+    admin_capture_session, admin_capture_sessions, delete_capture_session, ensure_session,
+    persist_analysis, purge_expired_capture_sessions, recent_decisions,
     session_tailoring_keypoints,
 )
 from .database import database_health
 from .measurements import REGISTRY_VERSION, persist_runtime_estimates, published_measurement_paths, router as measurements_router
-from .roboflow import analyze_keypoint_capture, analyze_measurement_capture, configuration_status as roboflow_status
+from .roboflow import analyze_keypoint_capture, configuration_status as roboflow_status
 from .circumference import _apply_profile, _load_calibration_profile, estimate_back_measurements
 from .path_estimation import calculate_ordered_path, normalize_keypoints, reference_scale_mm_per_pixel, view_scale_mm_per_pixel
 
-app = FastAPI(title="VisionFit quality service", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+def _retention_days() -> int:
+    value = os.getenv("VISIONFIT_RETENTION_DAYS", "30")
+    try:
+        days = int(value)
+    except ValueError as error:
+        raise RuntimeError("VISIONFIT_RETENTION_DAYS must be a positive integer") from error
+    if days < 1:
+        raise RuntimeError("VISIONFIT_RETENTION_DAYS must be a positive integer")
+    return days
+
+
+def _retention_enabled() -> bool:
+    value = os.getenv("VISIONFIT_RETENTION_ENABLED", "true").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError("VISIONFIT_RETENTION_ENABLED must be a boolean")
+
+
+async def _retention_worker() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(purge_expired_capture_sessions, _retention_days())
+        except Exception:
+            logger.exception("VisionFit capture-retention cleanup failed")
+        await asyncio.sleep(60 * 60)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if not _retention_enabled():
+        yield
+        return
+    _retention_days()
+    task = asyncio.create_task(_retention_worker())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="VisionFit quality service", version="0.1.0", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(measurements_router)
 
@@ -64,16 +119,28 @@ MIN_DIMENSION = 64
 
 @app.get("/api/health")
 def health() -> dict:
+    # Keep Roboflow workflow identifiers out of the unauthenticated health check.
+    vision = {
+        key: value for key, value in roboflow_status().items()
+        if key not in ("keypointWorkflow", "segmentationWorkflow")
+    }
     return {"status": "ok", "opencv": cv2.__version__, "database": "ok" if database_health() else "unavailable",
-            "measurementVision": roboflow_status()}
+            "measurementVision": vision}
 
 
 @app.post("/api/quality")
-async def quality(view: str = Form(...), file: UploadFile = File(...)) -> dict:
+async def quality(
+    view: str = Form(...), consent: bool = Form(False), file: UploadFile = File(...),
+    _user: SessionUser = Depends(current_user),
+) -> dict:
+    if not consent:
+        raise HTTPException(status_code=403, detail="Explicit consent is required before processing")
     if view not in QUALITY_VIEWS:
         raise HTTPException(status_code=400, detail="view must be 'front' or 'side'")
 
-    data = await file.read()
+    data = await file.read(MAX_CAPTURE_BYTES + 1)
+    if len(data) > MAX_CAPTURE_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds 20 MiB")
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
 
@@ -106,6 +173,15 @@ def capture_session_detail(session_id: str, _admin: SessionUser = Depends(requir
         raise HTTPException(404, "Capture session not found")
     return detail
 
+
+@app.delete("/api/capture-sessions/{session_id}")
+def delete_own_capture_session(session_id: str, user: SessionUser = Depends(current_user)) -> dict:
+    deleted = delete_capture_session(session_id, owner_id=user.id)
+    if deleted is None:
+        raise HTTPException(404, "Capture session not found")
+    return {"deleted": True, **deleted}
+
+
 # VF-2 uses its own endpoint so VF-0's narrower contract remains compatible.
 from .capture import capture_decision
 
@@ -115,11 +191,12 @@ MAX_CAPTURE_BYTES = 20 * 1024 * 1024
 @app.post('/api/measurement-estimates')
 async def measurement_estimates(
     consent: bool = Form(False), height_mm: float = Form(...),
+    external_vision_consent: bool = Form(False),
     session_id: str | None = Form(None),
     front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
     user: SessionUser = Depends(current_user),
-    calibration_kind: str | None = Form(None),
-    calibration_reference: UploadFile | None = File(None),
+    calibration_kind: Annotated[str | None, Form()] = None,
+    calibration_reference: Annotated[UploadFile | None, File()] = None,
 ) -> dict:
     """Execute published ordered tailoring-keypoint paths across three calibrated views."""
     if not consent:
@@ -162,6 +239,11 @@ async def measurement_estimates(
         views_needing_inference = [view for view, points in points_by_view.items() if not points]
         predictions = {}
         if views_needing_inference:
+            if not external_vision_consent and roboflow_status().get("keypointsReady"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Separate consent is required to send images to Roboflow for keypoint detection",
+                )
             with ThreadPoolExecutor(max_workers=len(views_needing_inference)) as executor:
                 futures = {view: executor.submit(analyze_keypoint_capture, encoded[view])
                            for view in views_needing_inference}
@@ -250,24 +332,30 @@ async def measurement_estimates(
 @app.post('/api/capture')
 async def capture(
     view: str = Form(...), consent: bool = Form(False), session_id: str | None = Form(None),
-    height_mm: float | None = Form(None), file: UploadFile = File(...),
-    user: SessionUser = Depends(current_user),
+    height_mm: float | None = Form(None), training_consent: bool = Form(False),
+    external_vision_consent: bool = Form(False),
+    file: UploadFile = File(...), user: SessionUser = Depends(current_user),
 ) -> dict:
     if not consent:
         raise HTTPException(403, 'Explicit consent is required before processing')
     if view not in CAPTURE_VIEWS:
         raise HTTPException(400, 'view must be front, side or back')
     try:
-        capture_session_id = ensure_session(user, session_id, height_mm)
+        capture_session_id = ensure_session(
+            user, session_id, height_mm, training_consent, external_vision_consent,
+        )
     except PermissionError as error:
         raise HTTPException(404, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    return await _process_capture_upload(user, capture_session_id, view, file)
+    return await _process_capture_upload(
+        user, capture_session_id, view, file, external_vision_consent,
+    )
 
 
 async def _process_capture_upload(
     user: SessionUser, capture_session_id, view: str, file: UploadFile,
+    external_vision_consent: bool = False,
 ) -> dict:
     data = await file.read(MAX_CAPTURE_BYTES + 1)
     if len(data) > MAX_CAPTURE_BYTES:
@@ -276,8 +364,11 @@ async def _process_capture_upload(
     if image is None or min(image.shape[:2]) < MIN_DIMENSION:
         raise HTTPException(400, 'Select a decodable image at least 64 pixels in each dimension')
     record = capture_decision(view, image, data)
-    record["measurementVision"] = analyze_measurement_capture(data)
-    keypoint_model = record["measurementVision"].get("models", {}).get("keypoints", {})
+    record["measurementVision"] = (
+        analyze_keypoint_capture(data) if external_vision_consent
+        else {"status": "not_consented", "provider": "roboflow_workflows"}
+    )
+    keypoint_model = record["measurementVision"]
     if keypoint_model.get("status") == "complete":
         tailoring_points = normalize_keypoints(keypoint_model.get("output", {}), image.shape[1], image.shape[0])
         record.setdefault("evidence", []).extend({
@@ -297,22 +388,27 @@ async def _process_capture_upload(
 @app.post('/api/captures')
 async def capture_batch(
     consent: bool = Form(False), session_id: str | None = Form(None),
-    height_mm: float | None = Form(None), front: UploadFile = File(...),
-    side: UploadFile = File(...), back: UploadFile = File(...),
+    height_mm: float | None = Form(None), training_consent: bool = Form(False),
+    external_vision_consent: bool = Form(False),
+    front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
     user: SessionUser = Depends(current_user),
 ) -> dict:
     """Authenticate once, then process all capture views in one shared session."""
     if not consent:
         raise HTTPException(403, 'Explicit consent is required before processing')
     try:
-        capture_session_id = ensure_session(user, session_id, height_mm)
+        capture_session_id = ensure_session(
+            user, session_id, height_mm, training_consent, external_vision_consent,
+        )
     except PermissionError as error:
         raise HTTPException(404, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     results = []
     for view, upload in (("front", front), ("side", side), ("back", back)):
-        results.append(await _process_capture_upload(user, capture_session_id, view, upload))
+        results.append(await _process_capture_upload(
+            user, capture_session_id, view, upload, external_vision_consent,
+        ))
     return {"captureSessionId": str(capture_session_id), "results": results}
 
 # A slow turn is analysed by sampling a fixed number of frames across the clip, so
