@@ -189,9 +189,23 @@ export default function App() {
             onChangeValue={(v) => setHeight((h) => ({ ...h, value: v }))}
             onChangeUnit={(u) => setHeight((h) => ({ ...h, unit: u }))}
             onBack={() => setStep('consent')}
-            onContinue={() => setStep('calibration')}
+            onContinue={() => setStep('video')}
           />
         )}
+        {step === 'video' && <>
+          <TurnVideo
+            consent={consent.agreed && consent.acknowledged}
+            sessionId={captureSessionId}
+            heightMm={Number(height.value) * (height.unit === 'in' ? 25.4 : 10)}
+            trainingConsent={consent.training}
+            onSessionCreated={setCaptureSessionId}
+            onDelete={deleteCaptureData}
+          />
+          <div className="actions">
+            <button className="secondary" onClick={() => setStep('height')}>Back</button>
+            <button className="secondary" onClick={() => setStep('calibration')}>Use separate photos instead</button>
+          </div>
+        </>}
         {step === 'calibration' && <CalibrationReferenceStep
           kind={calibrationKind} preview={calibration.preview}
           onKind={setCalibrationKind} onSelect={handleCalibration}
@@ -244,6 +258,9 @@ export default function App() {
           consent={true}
           sessionId={captureSessionId}
           heightMm={Number(height.value) * (height.unit === 'in' ? 25.4 : 10)}
+          trainingConsent={consent.training}
+          onSessionCreated={setCaptureSessionId}
+          onDelete={deleteCaptureData}
         />
       )}
       <DecisionLog records={log} />

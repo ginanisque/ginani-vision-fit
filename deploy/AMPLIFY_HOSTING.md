@@ -87,6 +87,7 @@ with status `200`. The current interface uses a single document and does not req
 
 1. Confirm the Amplify build is green and the custom domain certificate is issued.
 2. Open the landing page and verify the banner, logo, measurement image, and favicons.
-3. Select **Start VisionFit**, create or sign in to a test account, and complete one consented test capture.
+3. Select **Start VisionFit**, create or sign in to a test account, and submit one consented slow-turn
+   video. The separate-photo workflow remains available as a fallback.
 4. Confirm browser requests use the ECS HTTPS hostname and do not fail CORS.
 5. Sign in as the configured bootstrap administrator and verify the admin workspace is hidden from customers.

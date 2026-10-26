@@ -62,8 +62,11 @@ Endpoints:
 - `POST /api/capture` — authenticated multipart form: `view` + `consent` + `file`. Consent-gated
   exposure/blur, contrast-silhouette framing, cord candidate and pose-landmark
   posture evidence (VF-2).
-- `POST /api/turn-video` — authenticated multipart form: `consent` + `file` (video). Duration,
-  sampled exposure/blur and pose-orientation turn coverage (VF-2).
+- `POST /api/turn-video` — authenticated multipart form: `consent`, optional `height_mm`,
+  optional `training_consent`, and `file` (video). Duration, sampled exposure/blur and
+  pose-orientation turn coverage are checked. Complete, quality-passing turns produce experimental
+  MediaPipe/OpenCV estimates from selected front/side/back frames, saved review-only to the linked
+  measurement table. Quality uncertainty is sent to human review rather than automatically rejected.
 - `POST /api/measurement-estimates` — authenticated multipart form: `consent`, `height_mm`,
   `external_vision_consent`, `front`, `side`, and `back`. Runs the tailoring-keypoint workflow only
   when the customer separately consents to Roboflow processing, executes each published

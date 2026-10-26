@@ -173,13 +173,16 @@ def test_turn_coverage_complete(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "load_pose", lambda: object())
     monkeypatch.setattr(main_module, "estimate_pose", fake_estimate)
     reader, count = _make_video(tmp_path)
+    selected_frames = {}
     try:
-        coverage = main_module.turn_coverage(reader, count, count / 10.0)
+        coverage = main_module.turn_coverage(reader, count, count / 10.0, selected_frames=selected_frames)
     finally:
         reader.release()
     assert coverage["status"] == "complete"
     assert set(coverage["seenViews"]) == {"front", "back", "side"}
     assert coverage["missingViews"] == []
+    assert set(selected_frames) == {"front", "side", "back"}
+    assert set(coverage["selectedViewFrames"]) == {"front", "side", "back"}
 
 
 def test_turn_coverage_extracts_measurements_from_best_back_frame(monkeypatch, tmp_path):

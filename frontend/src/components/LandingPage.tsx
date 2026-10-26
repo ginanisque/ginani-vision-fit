@@ -59,7 +59,7 @@ export function LandingPage({ onStart }: LandingPageProps) {
           <p>VisionFit turns a careful capture into structured evidence for garment measurement. The service checks image quality and posture before results reach the review workspace.</p>
           <ol className="process-list">
             <li><span>01</span><div><strong>Prepare</strong><p>Read the privacy notice, give consent, and enter your height for scale.</p></div></li>
-            <li><span>02</span><div><strong>Capture</strong><p>Upload clear front, side, and back photos, followed by an optional slow-turn video.</p></div></li>
+            <li><span>02</span><div><strong>Capture</strong><p>Record or upload one slow turn; VisionFit checks for front, side, and back views. Separate photos remain an optional fallback.</p></div></li>
             <li><span>03</span><div><strong>Check</strong><p>Automated checks flag blur, lighting, framing, orientation, and posture concerns.</p></div></li>
             <li><span>04</span><div><strong>Review</strong><p>An authorised specialist reviews landmarks and the resulting measurement table.</p></div></li>
           </ol>

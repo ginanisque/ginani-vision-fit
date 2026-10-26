@@ -13,6 +13,7 @@ from app.measurements import (
     _from_mm,
     _to_mm,
     measurement_definitions,
+    persist_video_estimates,
     set_measurement_value,
     validate_measurement_path,
 )
@@ -79,6 +80,42 @@ def test_estimate_requires_confidence_and_declared_views(monkeypatch):
     assert wrong_view.value.status_code == 422
 
 
+def test_admin_review_can_preserve_video_source_views(monkeypatch):
+    class Result:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, statement, _params=()):
+            if statement.lstrip().startswith("select version.required_views"):
+                return Result({"required_views": ["front", "back"]})
+            return Result({"id": "value-1"})
+
+    class ConnectionContext:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("app.measurements.connection", lambda: ConnectionContext())
+    monkeypatch.setattr("app.measurements._load_table", lambda *_args: {"id": "table-1"})
+
+    body = run(set_measurement_value(
+        str(uuid4()), "bust",
+        MeasurementValueRequest(
+            value=90, method="admin_review", status="reviewed",
+            source_views=["front", "side"], confidence=0.5,
+        ),
+        "cm", ADMIN,
+    ))
+
+    assert body["id"] == "table-1"
+
+
 def test_unknown_measurement_is_404_without_database_access():
     with pytest.raises(HTTPException) as missing_measurement:
         run(set_measurement_value(
@@ -106,3 +143,54 @@ def test_ordered_surface_path_is_valid():
 def test_invalid_path_relationships_are_rejected(path_request, message):
     with pytest.raises(HTTPException, match=message):
         validate_measurement_path(path_request)
+
+
+def test_video_estimates_are_saved_for_admin_review_without_overwriting_approved_rows(monkeypatch):
+    statements = []
+
+    class Result:
+        def __init__(self, row=None):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Connection:
+        def execute(self, statement, params=()):
+            statements.append((statement, params))
+            normalized = " ".join(statement.split()).lower()
+            if normalized.startswith("select id, customer_id from capture_sessions"):
+                return Result({"id": "session-1", "customer_id": ADMIN.id})
+            if normalized.startswith("select id from measurement_tables"):
+                return Result({"id": "table-1"})
+            if normalized.startswith("update measurement_values"):
+                return Result({"id": "value-1"} if params[5] == "bust" else None)
+            return Result()
+
+    class ConnectionContext:
+        def __enter__(self):
+            return Connection()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("app.measurements.connection", lambda: ConnectionContext())
+    result = persist_video_estimates(
+        user=ADMIN,
+        session_id="session-1",
+        model_version="vf3-test",
+        estimates=[
+            {"key": "bust", "valueMm": 900, "sourceViews": ["front", "side"], "confidence": 0.5},
+            {"key": "waist", "valueMm": 700, "sourceViews": ["front", "side", "back"], "confidence": 0.4},
+        ],
+    )
+
+    assert result == {
+        "measurementTableId": "table-1",
+        "persistedKeys": ["bust"],
+        "skippedKeys": ["waist"],
+    }
+    update_statements = [statement.lower() for statement, _ in statements if statement.lower().startswith("update measurement_values")]
+    assert len(update_statements) == 2
+    assert all("status <> 'reviewed'" in statement for statement in update_statements)
+    assert any("video_estimates" in statement for statement, _ in statements)

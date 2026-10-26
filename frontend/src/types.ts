@@ -41,7 +41,10 @@ export interface MeasurementRowDto extends MeasurementDefinitionDto {
   value: number | null
   unit: 'mm' | 'cm' | 'in'
   status: 'pending' | 'estimated' | 'reviewed' | 'unavailable'
+  sourceViews?: Array<'front' | 'side' | 'back'>
   confidence: number | null
+  method?: string | null
+  notes?: string | null
   requiresReview: boolean
 }
 
@@ -147,7 +150,7 @@ export interface AnalysisDecisionDto {
 
 export type CalibrationKind = 'a4' | 'letter' | 'ruler_12in'
 
-export type Step = 'consent' | 'height' | 'calibration' | 'front' | 'side' | 'back' | 'review'
+export type Step = 'consent' | 'height' | 'video' | 'calibration' | 'front' | 'side' | 'back' | 'review'
 
 export interface ConsentState {
   agreed: boolean
@@ -269,6 +272,7 @@ export interface TurnCoverage {
   seenViews: string[]
   missingViews: string[]
   orientations: Array<{ timeSeconds: number; orientation: string }>
+  selectedViewFrames?: Partial<Record<'front' | 'side' | 'back', number>>
   method: string
   backMeasurements?: {
     status: 'experimental'
@@ -290,10 +294,19 @@ export interface VideoDecision {
   id: string
   view: 'turn'
   decision: 'recapture' | 'review'
+  captureSessionId?: string
   durationSeconds: number
   samples: Array<{timeSeconds: number; quality: 'pass' | 'fail'; reasons: string[]}>
   turnCoverage?: TurnCoverage
+  measurementEstimates?: {
+    modelVersion: string
+    measurementTableId: string
+    persistedKeys: string[]
+    skippedKeys: string[]
+    measurements: Array<{ key: string; displayName: string; value: number; unit: 'cm'; confidence: number }>
+    warning: string
+  }
+  measurementEstimateError?: string
   reasons: string[]
   scope: string
-  captureSessionId?: string
 }

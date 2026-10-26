@@ -22,9 +22,15 @@ from .capture_store import (
     session_tailoring_keypoints,
 )
 from .database import database_health
-from .measurements import REGISTRY_VERSION, persist_runtime_estimates, published_measurement_paths, router as measurements_router
+from .measurements import (
+    REGISTRY_VERSION, persist_runtime_estimates, persist_video_estimates,
+    published_measurement_paths, router as measurements_router,
+)
 from .roboflow import analyze_keypoint_capture, configuration_status as roboflow_status
-from .circumference import _apply_profile, _load_calibration_profile, estimate_back_measurements
+from .circumference import (
+    _apply_profile, _load_calibration_profile, estimate_back_measurements,
+    estimate_circumferences,
+)
 from .path_estimation import calculate_ordered_path, normalize_keypoints, reference_scale_mm_per_pixel, view_scale_mm_per_pixel
 
 logger = logging.getLogger(__name__)
@@ -422,7 +428,10 @@ async def capture_batch(
 MAX_TURN_SECONDS = 90.0
 
 
-def turn_coverage(reader, count: float, duration: float, height_mm: float | None = None) -> dict:
+def turn_coverage(
+    reader, count: float, duration: float, height_mm: float | None = None,
+    selected_frames: dict[str, np.ndarray] | None = None,
+) -> dict:
     """Sample frames across a turn clip and derive view-orientation coverage."""
     pose = load_pose()
     model_available = pose is not None
@@ -430,6 +439,8 @@ def turn_coverage(reader, count: float, duration: float, height_mm: float | None
     orientations = []
     back_measurements = None
     best_back_visibility = -1.0
+    best_view_visibility: dict[str, float] = {}
+    best_view_times: dict[str, float] = {}
     for i in range(20):
         fraction = (i + 0.5) / 20.0
         reader.set(cv2.CAP_PROP_POS_FRAMES, int(count * fraction))
@@ -438,11 +449,16 @@ def turn_coverage(reader, count: float, duration: float, height_mm: float | None
             continue
         landmarks = estimate_pose(frame, pose)
         orientation = view_orientation(landmarks) if landmarks else 'unknown'
-        if orientation == 'back' and landmarks and height_mm is not None:
+        if orientation in {'front', 'side', 'back'} and landmarks:
             visibility = min(
                 landmarks[name].visibility
                 for name in ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')
             )
+            if selected_frames is not None and visibility > best_view_visibility.get(orientation, -1.0):
+                selected_frames[orientation] = frame.copy()
+                best_view_visibility[orientation] = visibility
+                best_view_times[orientation] = round(duration * fraction, 2)
+        if orientation == 'back' and landmarks and height_mm is not None:
             if visibility > best_back_visibility:
                 try:
                     back_measurements = estimate_back_measurements(frame, height_mm, landmarks)
@@ -467,6 +483,7 @@ def turn_coverage(reader, count: float, duration: float, height_mm: float | None
         seenViews=sorted(seen),
         missingViews=missing,
         orientations=orientations,
+        selectedViewFrames=best_view_times,
         method='pose-landmark orientation' if model_available else 'pose model unavailable',
         backMeasurements=back_measurements,
     )
@@ -476,6 +493,7 @@ def turn_coverage(reader, count: float, duration: float, height_mm: float | None
 async def turn_video(
     consent: bool = Form(False), session_id: str | None = Form(None),
     height_mm: float | None = Form(None),
+    training_consent: bool = Form(False),
     file: UploadFile = File(...), user: SessionUser = Depends(current_user),
 ) -> dict:
     """Bounded local video inspection; temporary source is always deleted."""
@@ -513,21 +531,64 @@ async def turn_video(
             samples.append(dict(timeSeconds=round(duration*fraction, 2),
                                 quality='pass' if result.passed else 'fail', reasons=list(result.reasons)))
 
-        coverage = turn_coverage(reader, count, duration, height_mm)
+        selected_frames: dict[str, np.ndarray] = {}
+        coverage = turn_coverage(reader, count, duration, height_mm, selected_frames)
 
-        recapture = len(samples) != 5 or any(s['quality'] == 'fail' for s in samples)
+        sample_quality_pass = len(samples) == 5 and all(
+            sample["quality"] == "pass" for sample in samples
+        )
         reasons = []
-        if len(samples) != 5 or any(s['quality'] == 'fail' for s in samples):
-            reasons.append('One or more sampled video frames are missing, blurry or poorly exposed; record again.')
+        if not sample_quality_pass:
+            reasons.append(
+                'Some sampled frames are missing, blurry or poorly exposed. The video is kept for '
+                'human review, but automated measurement estimates are withheld.'
+            )
         if coverage['status'] == 'incomplete':
-            recapture = True
-            reasons.append('The turn does not show a full rotation: missing ' + ', '.join(coverage['missingViews']) + '.')
+            reasons.append(
+                'Turn coverage could not identify every view (missing '
+                + ', '.join(coverage['missingViews'])
+                + '). The video is kept for human review.'
+            )
         elif coverage['status'] == 'complete':
             reasons.append('The turn shows front, side and back. Confirm it is a single continuous turn with neutral posture.')
         else:
             reasons.append('Rotation completeness could not be verified automatically; a reviewer must confirm a full turn.')
 
-        record = dict(id=str(uuid.uuid4()), view='turn', decision='recapture' if recapture else 'review',
+        measurement_estimates = None
+        measurement_estimate_error = None
+        if coverage['status'] == 'complete' and sample_quality_pass and height_mm is not None:
+            try:
+                geometry = estimate_circumferences(
+                    selected_frames['front'], selected_frames['side'], height_mm,
+                    selected_frames['back'],
+                )
+                back_estimates = coverage.get("backMeasurements")
+                if back_estimates:
+                    back_keys = {"across_back": "across_back", "nape_to_cb_waist": "nape_to_waist"}
+                    for estimate in back_estimates.get("measurements", []):
+                        measurement_key = back_keys.get(estimate.get("key"))
+                        candidate = next(
+                            (item for item in geometry["measurements"] if item["key"] == measurement_key),
+                            None,
+                        )
+                        if candidate is not None:
+                            candidate["value"] = estimate["value"]
+                            candidate["rawValueMm"] = estimate["value"] * 10
+                            candidate["confidence"] = estimate["confidence"]
+                            candidate["sourceViews"] = ["back"]
+                            candidate["provenance"] = back_estimates["method"]
+                measurement_estimates = geometry
+            except (KeyError, ValueError) as error:
+                measurement_estimate_error = str(error)
+                reasons.append(f'OpenCV measurement estimates unavailable: {measurement_estimate_error}')
+        elif coverage['status'] == 'complete' and height_mm is None:
+            measurement_estimate_error = 'Enter your height to calibrate video measurements.'
+            reasons.append(measurement_estimate_error)
+        elif coverage['status'] == 'complete' and not sample_quality_pass:
+            measurement_estimate_error = 'Frame quality checks did not pass; no video measurements were generated.'
+            reasons.append(measurement_estimate_error)
+
+        record = dict(id=str(uuid.uuid4()), view='turn', decision='review',
                       imageFingerprint=dict(sha256=hashlib.sha256(data).hexdigest()),
                       checkedAt=datetime.now(timezone.utc).isoformat(), durationSeconds=round(duration,2),
                       samples=samples, turnCoverage=coverage, reasons=reasons,
@@ -535,9 +596,39 @@ async def turn_video(
                             'Posture quality and single-continuous-turn confirmation still require review.',
                       provisionalThresholds=True)
         try:
-            capture_session_id = ensure_session(user, session_id)
+            capture_session_id = ensure_session(
+                user, session_id, height_mm, training_consent,
+            )
         except PermissionError as error:
             raise HTTPException(404, str(error)) from error
+        if measurement_estimates is not None:
+            persisted_estimates = [
+                {
+                    "key": item["key"],
+                    "valueMm": item["value"] * 10,
+                    "sourceViews": item["sourceViews"],
+                    "confidence": item["confidence"],
+                }
+                for item in measurement_estimates["measurements"]
+            ]
+            persistence = persist_video_estimates(
+                user=user, session_id=str(capture_session_id), estimates=persisted_estimates,
+                model_version=measurement_estimates["modelVersion"],
+            )
+            record["measurementEstimates"] = {
+                **measurement_estimates,
+                **persistence,
+                "measurements": [
+                    {**item, "requiresReview": True}
+                    for item in measurement_estimates["measurements"]
+                ],
+                "warning": (
+                    "Experimental MediaPipe/OpenCV video estimates require admin review and "
+                    "confirmation against tape measurements."
+                ),
+            }
+        elif measurement_estimate_error:
+            record["measurementEstimateError"] = measurement_estimate_error
         record.update(persist_analysis(
             user=user, session_id=capture_session_id, view="turn", data=data,
             content_type=file.content_type or "application/octet-stream", record=record,

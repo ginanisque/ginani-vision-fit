@@ -20,9 +20,13 @@ Neon Object Storage. The data flow and review/recapture loop are shown in
 
 The container pins `opencv-python-headless==5.0.0.93` (OpenCV 5.0.0). OpenCV handles image decode,
 exposure and blur checks, framing evidence, and video sampling. MediaPipe Pose supplies posture and
-turn-orientation landmarks. Measurement geometry uses administrator-published ordered COCO v6
-keypoint paths; body outlines are used only for capture evidence and height-based scale calibration.
-If keypoints or required segments are unavailable, the service blocks the affected estimate.
+turn-orientation landmarks. Still-photo measurement geometry uses administrator-published ordered
+COCO v6 keypoint paths; body outlines are used only for capture evidence and height-based scale
+calibration. For a complete, quality-passing slow turn, the service selects the clearest detected
+front, side, and back frames and runs the experimental MediaPipe/OpenCV geometry estimator using
+entered height for scale. Those estimates are saved to the linked measurement table as review-only
+candidates; reviewed values are never overwritten by a new video run. Video-derived candidates are
+not validated against professional tape measurements.
 
 Roboflow is an optional, external keypoint provider. Calls are gated by an additional, per-session
 customer opt-in, separate from the general capture and model-training consent. Segmentation is not

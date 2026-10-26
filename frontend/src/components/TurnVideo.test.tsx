@@ -56,6 +56,21 @@ describe('slow-turn workflow', () => {
     expect(coverage.textContent).toContain('complete')
     expect(coverage.textContent).toContain('front, back, side')
   })
+  it('returns the created capture session to the customer workflow', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      id: 'video-run', view: 'turn', decision: 'review', durationSeconds: 12,
+      samples: [], reasons: [], scope: 'review',
+      captureSessionId: 'capture-session-1',
+    }) })
+    const onSessionCreated = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} onSessionCreated={onSessionCreated} />)
+    const user = userEvent.setup()
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    await screen.findByText(/Video: review/)
+    expect(onSessionCreated).toHaveBeenCalledWith('capture-session-1')
+  })
   it('shows an actionable message when the service is unreachable', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
     vi.stubGlobal('fetch', fetchMock)

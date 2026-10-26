@@ -46,13 +46,14 @@ async function reachReview(
 ) {
   await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
   await user.click(screen.getByRole('button', { name: /start visionfit/i }))
-  await user.click(screen.getByLabelText(/consent to my body photos/i))
+  await user.click(screen.getByLabelText(/consent to my body video or photos/i))
   await user.click(screen.getByLabelText(/understand why captures/i))
-  if (externalVision) await user.click(screen.getByLabelText(/consent to sending my capture photos/i))
+  if (externalVision) await user.click(screen.getByLabelText(/consent to sending still capture photos/i))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   await user.type(screen.getByLabelText(/height/i), '165')
   await user.click(screen.getByRole('button', { name: /continue/i }))
+  await user.click(screen.getByRole('button', { name: /use separate photos instead/i }))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   const frontInput = container.querySelector('input[type="file"]') as HTMLInputElement
@@ -89,11 +90,28 @@ describe('App', () => {
     const continueBtn = screen.getByRole('button', { name: /continue/i })
     expect(continueBtn).toBeDisabled()
 
-    await user.click(screen.getByLabelText(/consent to my body photos/i))
+    await user.click(screen.getByLabelText(/consent to my body video or photos/i))
     expect(continueBtn).toBeDisabled()
 
     await user.click(screen.getByLabelText(/understand why captures/i))
     expect(continueBtn).toBeEnabled()
+  })
+
+  it('defaults to slow-turn video and keeps still photos as an optional fallback', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /start visionfit/i }))
+    await user.click(screen.getByLabelText(/consent to my body video or photos/i))
+    await user.click(screen.getByLabelText(/understand why captures/i))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.type(screen.getByLabelText(/height/i), '165')
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(screen.getByRole('heading', { name: /one slow-turn video/i })).toBeInTheDocument()
+    expect(screen.getByLabelText(/choose video/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /use separate photos instead/i }))
+    expect(screen.getByRole('heading', { name: /optional scale reference/i })).toBeInTheDocument()
   })
 
   it('requests recapture when an image fails quality', async () => {

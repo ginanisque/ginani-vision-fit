@@ -313,6 +313,7 @@ async def measurement_definitions(scope: Literal["core", "future", "all"] = Quer
 async def create_measurement_table(
     request: CreateTableRequest, admin: SessionUser = Depends(require_admin)
 ) -> dict:
+    existing_table_id = None
     with connection() as conn:
         customer = conn.execute(
             "select id from app_users where id::text = %s or lower(email) = lower(%s)",
@@ -327,13 +328,38 @@ async def create_measurement_table(
             ).fetchone()
             if capture is None:
                 raise HTTPException(404, "Capture session not found for this person")
-        table = conn.execute(
-            """insert into measurement_tables
-                    (customer_id, capture_session_id, registry_version, preferred_unit, created_by)
-                 values (%s, %s, %s, %s, %s) returning id""",
-            (customer["id"], request.capture_session_id, REGISTRY_VERSION, request.unit, admin.id),
-        ).fetchone()
+            existing = conn.execute(
+                """select id from measurement_tables
+                    where customer_id = %s and capture_session_id = %s
+                    order by created_at desc limit 1""",
+                (customer["id"], capture["id"]),
+            ).fetchone()
+            if existing is not None:
+                existing_table_id = existing["id"]
+        if existing_table_id is None:
+            table = conn.execute(
+                """insert into measurement_tables
+                        (customer_id, capture_session_id, registry_version, preferred_unit, created_by)
+                     values (%s, %s, %s, %s, %s) returning id""",
+                (customer["id"], request.capture_session_id, REGISTRY_VERSION, request.unit, admin.id),
+            ).fetchone()
+    if existing_table_id is not None:
+        return _load_table(str(existing_table_id), request.unit)
     return _load_table(str(table["id"]), request.unit)
+
+
+@router.get("/admin/capture-sessions/{session_id}/measurement-table")
+async def get_capture_measurement_table(
+    session_id: str, _admin: SessionUser = Depends(require_admin),
+) -> dict | None:
+    with connection() as conn:
+        table = conn.execute(
+            """select id from measurement_tables
+                where capture_session_id::text = %s
+                order by created_at desc limit 1""",
+            (session_id,),
+        ).fetchone()
+    return _load_table(str(table["id"]), "cm") if table else None
 
 
 @router.get("/measurement-tables/{table_id}")
@@ -369,7 +395,10 @@ async def set_measurement_value(
         ).fetchone()
         if pinned is None:
             raise HTTPException(404, "Measurement table or measurement row not found")
-        unexpected_views = sorted(set(request.source_views) - set(pinned["required_views"]))
+        unexpected_views = (
+            sorted(set(request.source_views) - set(pinned["required_views"]))
+            if request.method != "admin_review" else []
+        )
         if unexpected_views:
             raise HTTPException(422, f"Views not declared by this table's {key} version: {', '.join(unexpected_views)}")
         updated = conn.execute(
@@ -432,6 +461,58 @@ def persist_runtime_estimates(
                  values (%s, 'measurement_table', %s, 'runtime_estimates', %s)""",
             (user.id, str(table["id"]), Jsonb({"persisted": persisted, "skipped": skipped,
                                                "modelVersion": model_version})),
+        )
+    return {"measurementTableId": str(table["id"]), "persistedKeys": persisted, "skippedKeys": skipped}
+
+
+def persist_video_estimates(
+    *, user: SessionUser, session_id: str, estimates: list[dict], model_version: str,
+) -> dict:
+    """Save MediaPipe/OpenCV video candidates for admin review without replacing reviewed values."""
+    with connection() as conn:
+        capture = conn.execute(
+            "select id, customer_id from capture_sessions where id::text = %s and customer_id = %s",
+            (session_id, user.id),
+        ).fetchone()
+        if capture is None:
+            raise PermissionError("Capture session not found for this customer")
+        table = conn.execute(
+            """select id from measurement_tables
+                where capture_session_id = %s and customer_id = %s
+                order by created_at desc limit 1""",
+            (capture["id"], user.id),
+        ).fetchone()
+        if table is None:
+            table = conn.execute(
+                """insert into measurement_tables
+                        (customer_id, capture_session_id, registry_version, preferred_unit, created_by)
+                     values (%s, %s, %s, 'cm', %s) returning id""",
+                (user.id, capture["id"], REGISTRY_VERSION, user.id),
+            ).fetchone()
+
+        persisted: list[str] = []
+        skipped: list[str] = []
+        for estimate in estimates:
+            updated = conn.execute(
+                """update measurement_values
+                      set value_mm = %s, status = 'estimated', method = 'mediapipe_opencv_video',
+                          source_views = %s::capture_view[], confidence = %s,
+                          notes = %s, reviewed_by = null, reviewed_at = null
+                    where table_id = %s and measurement_key = %s and status <> 'reviewed'
+                    returning id""",
+                (
+                    estimate["valueMm"], estimate["sourceViews"], estimate["confidence"],
+                    f"Video geometry model {model_version}; human review required",
+                    table["id"], estimate["key"],
+                ),
+            ).fetchone()
+            (persisted if updated else skipped).append(estimate["key"])
+        conn.execute(
+            """insert into audit_events (actor_id, entity_type, entity_id, action, after_data)
+                 values (%s, 'measurement_table', %s, 'video_estimates', %s)""",
+            (user.id, str(table["id"]), Jsonb({
+                "persisted": persisted, "skipped": skipped, "modelVersion": model_version,
+            })),
         )
     return {"measurementTableId": str(table["id"]), "persistedKeys": persisted, "skippedKeys": skipped}
 

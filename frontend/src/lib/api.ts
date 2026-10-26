@@ -152,12 +152,15 @@ export async function deleteCaptureSession(sessionId: string): Promise<void> {
 }
 
 /** POST a slow-turn video to the service and return its review decision. */
-export async function submitTurnVideoCheck(file: File, consent: boolean, sessionId?: string, heightMm?: number): Promise<VideoDecision> {
+export async function submitTurnVideoCheck(
+  file: File, consent: boolean, sessionId?: string, heightMm?: number, trainingConsent = false,
+): Promise<VideoDecision> {
   const form = new FormData()
   form.append('consent', String(consent))
   form.append('file', file)
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
+  form.append('training_consent', String(trainingConsent))
 
   let response: Response
   try {
@@ -268,6 +271,14 @@ export async function getCaptureSession(sessionId: string): Promise<CaptureSessi
 export async function getMeasurementAnalysis(sessionId: string): Promise<MeasurementReadinessDto> {
   const response = await fetch(apiUrl(`/api/admin/capture-sessions/${sessionId}/measurement-analysis`), { headers: await authorization() })
   if (!response.ok) throw new Error('Could not load measurement analysis.')
+  return await response.json()
+}
+
+export async function getCaptureMeasurementTable(sessionId: string): Promise<MeasurementTableDto | null> {
+  const response = await fetch(apiUrl(`/api/admin/capture-sessions/${sessionId}/measurement-table`), {
+    headers: await authorization(),
+  })
+  if (!response.ok) throw new Error('Could not load the linked measurement table.')
   return await response.json()
 }
 

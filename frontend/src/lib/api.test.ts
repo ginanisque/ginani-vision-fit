@@ -81,7 +81,7 @@ describe('submitTurnVideoCheck', () => {
     vi.stubGlobal('fetch', fetchFn)
     const file = new File(['video'], 'turn.webm', { type: 'video/webm' })
 
-    const result = await submitTurnVideoCheck(file, true)
+    const result = await submitTurnVideoCheck(file, true, 'session-1', 1650, true)
 
     expect(result).toEqual(decision)
     expect(bearerToken).toHaveBeenCalledOnce()
@@ -91,6 +91,9 @@ describe('submitTurnVideoCheck', () => {
     }))
     const body = fetchFn.mock.calls[0][1].body as FormData
     expect(body.get('consent')).toBe('true')
+    expect(body.get('session_id')).toBe('session-1')
+    expect(body.get('height_mm')).toBe('1650')
+    expect(body.get('training_consent')).toBe('true')
     expect(body.get('file')).toBe(file)
   })
 

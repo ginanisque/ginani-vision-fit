@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AnalysisDecisionDto, CaptureSessionDetailDto, CaptureSessionSummaryDto, CustomerDto, MeasurementDefinitionDto, MeasurementReadinessDto, MeasurementRowDto, MeasurementTableDto } from '../types'
-import { createMeasurementTable, getAnalysisDecisions, getCaptureSession, getCaptureSessions, getCustomers, getMeasurementAnalysis, getMeasurementDefinitions, updateMeasurementValue } from '../lib/api'
+import { createMeasurementTable, getAnalysisDecisions, getCaptureMeasurementTable, getCaptureSession, getCaptureSessions, getCustomers, getMeasurementAnalysis, getMeasurementDefinitions, updateMeasurementValue } from '../lib/api'
 import { MeasurementPathEditor } from './MeasurementPathEditor'
 
 export function AdminPanel() {
@@ -33,13 +33,18 @@ export function AdminPanel() {
   }, [])
 
   useEffect(() => {
-    if (!selectedSessionId) { setSessionDetail(null); setReadiness(null); return }
+    if (!selectedSessionId) { setSessionDetail(null); setReadiness(null); setTable(null); return }
     setBusy(true)
-    Promise.all([getCaptureSession(selectedSessionId), getMeasurementAnalysis(selectedSessionId)])
-      .then(([detail, analysis]) => {
+    Promise.all([
+      getCaptureSession(selectedSessionId),
+      getMeasurementAnalysis(selectedSessionId),
+      getCaptureMeasurementTable(selectedSessionId),
+    ])
+      .then(([detail, analysis, linkedTable]) => {
         setSessionDetail(detail)
         setReadiness(analysis)
         setSubjectId(detail.customerId)
+        setTable(linkedTable)
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(false))
@@ -64,7 +69,13 @@ export function AdminPanel() {
     }
     setBusy(true)
     setError(null)
-    try { setTable(await updateMeasurementValue(table!.id, row.key, value, status, row.requiredViews, 0.8)) }
+    try {
+      setTable(await updateMeasurementValue(
+        table!.id, row.key, value, status,
+        status === 'reviewed' && row.sourceViews?.length ? row.sourceViews : row.requiredViews,
+        row.confidence ?? 0.5,
+      ))
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
   }
@@ -146,13 +157,13 @@ export function AdminPanel() {
       </section>
 
       <section className="admin-card table-card">
-        <div className="section-heading"><div><h2>{table ? `Measurement table · ${table.subjectId}` : 'Measurement library'}</h2><p className="muted">Values remain pending until analysis or manual review supplies them.</p></div></div>
+        <div className="section-heading"><div><h2>{table ? `Measurement table · ${table.subjectId}` : 'Measurement library'}</h2><p className="muted">Video-derived MediaPipe/OpenCV values are experimental estimates. Review and adjust them against tape measurements before approval.</p></div></div>
         <div className="table-scroll">
           <table>
             <thead><tr><th>Measurement</th><th>Path</th><th>Views</th><th>Value</th><th>Status</th><th>Review</th></tr></thead>
             <tbody>
               {displayRows.map((item) => {
-                return <tr key={item.key}><td><strong>{item.displayName}</strong><small>{item.category}</small></td><td>{item.path}</td><td>{item.requiredViews.join(' · ')}</td><td>{item.value == null ? '—' : `${item.value} ${item.unit}`}</td><td><span className={`status-pill ${item.status ?? 'definition'}`}>{item.status ?? 'defined'}</span></td><td>{table && <><button type="button" disabled={busy} onClick={() => saveValue(item as MeasurementRowDto, 'estimated')}>Estimate</button><button type="button" disabled={busy} onClick={() => saveValue(item as MeasurementRowDto, 'reviewed')}>Approve</button></>}</td></tr>
+                return <tr key={item.key}><td><strong>{item.displayName}</strong><small>{item.category}</small>{item.method && <small>{item.method}{item.confidence == null ? '' : ` · ${Math.round(item.confidence * 100)}% confidence`}</small>}{item.sourceViews?.length ? <small>Source: {item.sourceViews.join(' · ')}</small> : null}{item.notes && <small>{item.notes}</small>}</td><td>{item.path}</td><td>{item.requiredViews.join(' · ')}</td><td>{item.value == null ? '—' : `${item.value} ${item.unit}`}</td><td><span className={`status-pill ${item.status ?? 'definition'}`}>{item.status ?? 'defined'}</span></td><td>{table && <><button type="button" disabled={busy} onClick={() => saveValue(item as MeasurementRowDto, 'estimated')}>Set estimate</button><button type="button" disabled={busy} onClick={() => saveValue(item as MeasurementRowDto, 'reviewed')}>Adjust &amp; approve</button></>}</td></tr>
               })}
             </tbody>
           </table>

@@ -5,7 +5,16 @@ import type { VideoDecision } from '../types'
 /** Backend limit for turn videos (service/app/main.py). */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-export function TurnVideo({ consent, sessionId, heightMm }: { consent: boolean; sessionId?: string; heightMm?: number }) {
+export function TurnVideo({
+  consent, sessionId, heightMm, trainingConsent, onSessionCreated, onDelete,
+}: {
+  consent: boolean
+  sessionId?: string
+  heightMm?: number
+  trainingConsent?: boolean
+  onSessionCreated?: (sessionId: string) => void
+  onDelete?: () => void
+}) {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState<string | null>(null)
   const [result, setResult] = useState<VideoDecision | null>(null)
@@ -65,12 +74,14 @@ export function TurnVideo({ consent, sessionId, heightMm }: { consent: boolean; 
     }
     setBusy(true); setError(''); setResult(null)
     try {
-      setResult(await submitTurnVideoCheck(file, consent, sessionId, heightMm))
+      const next = await submitTurnVideoCheck(file, consent, sessionId, heightMm, trainingConsent)
+      setResult(next)
+      if (next.captureSessionId) onSessionCreated?.(next.captureSessionId)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
   return <section className="step turn-video">
-    <h2>Slow-turn video</h2>
+    <h1>One slow-turn video</h1>
     <p>Use a helper or fixed camera. Show your head and bare feet with space around them. Keep the camera level, around waist height, without tilting. Step back until your full body fits.</p>
     <p>Stand naturally, shoulders relaxed, feet steady and arms slightly away from your body. Turn once slowly, showing front, both sides and back. Keep the waist cord visible. Recording stops at 20 seconds — longer clips are sampled across the whole turn.</p>
     <video ref={video} src={url ?? undefined} controls={!recording} muted playsInline aria-label="Slow-turn video preview" />
@@ -91,6 +102,26 @@ export function TurnVideo({ consent, sessionId, heightMm }: { consent: boolean; 
           {result.turnCoverage.missingViews.length > 0 && <> — missing {result.turnCoverage.missingViews.join(', ')}</>}
           <span className="muted"> ({result.turnCoverage.method})</span>
         </p>
+      )}
+      {result.turnCoverage?.selectedViewFrames && (
+        <p className="muted">
+          Selected frames: {(['front', 'side', 'back'] as const)
+            .filter(view => result.turnCoverage?.selectedViewFrames?.[view] !== undefined)
+            .map(view => `${view} ${result.turnCoverage?.selectedViewFrames?.[view]}s`).join(' · ')}
+        </p>
+      )}
+      {result.measurementEstimates && <section className="estimate-panel" aria-label="Video estimates submitted for review">
+        <h3>Video estimates sent for admin review</h3>
+        {result.measurementEstimates.persistedKeys.length > 0
+          ? <p>{result.measurementEstimates.persistedKeys.length} experimental measurements were saved for an administrator to review and adjust. They are not approved tailoring values.</p>
+          : <p>No new measurements were saved. Existing approved values were left unchanged.</p>}
+        {result.measurementEstimates.skippedKeys.length > 0 &&
+          <p className="muted">{result.measurementEstimates.skippedKeys.length} values were not updated because their table rows are unavailable or already approved.</p>}
+        <p className="muted">{result.measurementEstimates.warning}</p>
+      </section>}
+      {result.measurementEstimateError && <p className="muted">{result.measurementEstimateError}</p>}
+      {sessionId && onDelete && (
+        <button className="secondary" disabled={busy || recording} onClick={onDelete}>Delete my capture data</button>
       )}
       {result.turnCoverage?.backMeasurements && <section className="estimate-panel" aria-label="Experimental back measurements">
         <h3>Experimental back measurements</h3>

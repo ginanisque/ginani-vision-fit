@@ -258,7 +258,7 @@ def test_bad_video():
         assert c.post('/api/turn-video',data={'consent':'true'},files={'file':('bad.webm',b'bad')}).status_code == 400
 
 
-@pytest.mark.parametrize('seconds,dark,decision',[(10,False,'review'),(2,True,'recapture')])
+@pytest.mark.parametrize('seconds,dark,decision',[(10,False,'review'),(2,True,'review')])
 def test_video_quality_and_duration(tmp_path,seconds,dark,decision,monkeypatch):
     # Isolate duration/quality: disable the pose model so turn coverage stays
     # 'unknown' (coverage is tested separately in test_posture.py).
@@ -299,3 +299,71 @@ def test_longer_video_is_sampled_not_penalized_for_duration(tmp_path, monkeypatc
         assert r.status_code == 200
         assert r.json()['durationSeconds'] == seconds
         assert r.json()['decision'] == 'review'
+
+
+def test_complete_video_saves_review_only_measurements(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.main as main_module
+
+    orientations = ["front", "side", "back"]
+    state = {"index": 0}
+
+    def next_orientation(_landmarks):
+        orientation = orientations[state["index"] % len(orientations)]
+        state["index"] += 1
+        return orientation
+
+    landmarks = {
+        name: SimpleNamespace(visibility=0.95)
+        for name in ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    }
+    monkeypatch.setattr(main_module, "load_pose", lambda: object())
+    monkeypatch.setattr(main_module, "estimate_pose", lambda _frame, _pose=None: landmarks)
+    monkeypatch.setattr(main_module, "view_orientation", next_orientation)
+    monkeypatch.setattr(
+        main_module, "estimate_back_measurements",
+        lambda *_args: {"status": "experimental", "measurements": []},
+    )
+    geometry = {
+        "modelVersion": "vf3-test",
+        "measurements": [{
+            "key": "bust", "displayName": "Bust", "value": 90.0, "unit": "cm",
+            "rawValueMm": 900.0, "confidence": 0.5, "sourceViews": ["front", "side"],
+        }],
+    }
+    monkeypatch.setattr(main_module, "estimate_circumferences", lambda *_args: geometry)
+    saved = {}
+    session_arguments = {}
+    monkeypatch.setattr(main_module, "ensure_session", lambda *args: (
+        session_arguments.update({"args": args}) or uuid4()
+    ))
+    monkeypatch.setattr(main_module, "persist_video_estimates", lambda **kwargs: (
+        saved.update(kwargs) or {
+            "measurementTableId": "table-1", "persistedKeys": ["bust"], "skippedKeys": [],
+        }
+    ))
+
+    path = tmp_path / "turn.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (400, 600))
+    assert writer.isOpened()
+    for _ in range(100):
+        writer.write(subject())
+    writer.release()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/turn-video",
+            data={
+                "consent": "true", "height_mm": "1700", "session_id": str(uuid4()),
+                "training_consent": "true",
+            },
+            files={"file": ("turn.avi", path.read_bytes(), "video/x-msvideo")},
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["turnCoverage"]["selectedViewFrames"].keys() == {"front", "side", "back"}
+    assert result["measurementEstimates"]["persistedKeys"] == ["bust"]
+    assert result["measurementEstimates"]["measurements"][0]["requiresReview"] is True
+    assert saved["estimates"][0]["valueMm"] == 900.0
+    assert session_arguments["args"][2:] == (1700.0, True)

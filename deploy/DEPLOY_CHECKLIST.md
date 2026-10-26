@@ -46,7 +46,8 @@ service.
 
 1. `curl https://gi-4bffebb94e7c42ebaa6094d36fde44ad.ecs.us-east-1.on.aws/api/health`
    → `{"status":"ok","opencv":"5.0.0",...}`
-2. Open `https://visionfit.ginani.net`, sign in, and complete one consented test capture.
+2. Open `https://visionfit.ginani.net`, sign in, and submit one consented slow-turn video. Confirm the
+   separate-photo fallback remains accessible.
 3. Browser devtools → Network: requests hit the `gi-4bffebb...on.aws` host with no CORS errors.
 4. `/api/health` reports `measurementVision.keypointsReady: true` without revealing the workflow ID.
 5. In a test account, opt in to Roboflow keypoint processing and confirm all three captures return
