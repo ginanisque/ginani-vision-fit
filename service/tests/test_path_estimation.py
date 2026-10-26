@@ -42,6 +42,25 @@ def test_normalizes_nested_roboflow_keypoints():
     assert points["bust_point_right"].x == 300
 
 
+def test_normalizes_workflow_outputs_with_class_named_keypoints():
+    payload = {"outputs": [
+        {"predictions_at_0001": {"predictions": [{
+            "confidence": 0.92,
+            "keypoints": [
+                {"class": "nape", "class_id": 0, "x": 120, "y": 40, "confidence": 0.9},
+                {"class": "waist_center_back", "class_id": 1, "x": 125, "y": 260, "confidence": 0.85},
+            ],
+        }]}},
+        {"predictions_at_040": {"predictions": []}},
+    ]}
+
+    points = normalize_keypoints(payload, 400, 600)
+
+    assert set(points) == {"nape", "waist_center_back"}
+    assert points["nape"].x == 120
+    assert points["waist_center_back"].y == 260
+
+
 def test_executes_closed_bust_path_in_published_order():
     names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",
              "bust_point_right", "bust_level_right_side", "bust_level_center_back"]

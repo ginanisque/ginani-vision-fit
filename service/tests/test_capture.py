@@ -198,6 +198,24 @@ def test_measurement_inference_requires_separate_provider_consent(monkeypatch):
     assert rejected.value.status_code == 403
 
 
+def test_measurement_inference_reports_unrecognized_keypoint_response(monkeypatch):
+    import app.main as main_module
+    monkeypatch.setattr(main_module, "roboflow_status", lambda: {"keypointsReady": True})
+    monkeypatch.setattr(
+        main_module, "analyze_keypoint_capture",
+        lambda _data: {"status": "complete", "output": {"outputs": []}},
+    )
+    image = encoded(subject())
+    user = SessionUser(id=uuid4(), auth_subject="test-subject", email="customer@example.test", role="customer")
+    with pytest.raises(HTTPException) as unavailable:
+        asyncio.run(main_module.measurement_estimates(
+            True, 1650, True, None, uploaded("front.png", image), uploaded("side.png", image),
+            uploaded("back.png", image), user,
+        ))
+    assert unavailable.value.status_code == 503
+    assert "no supported named keypoints" in unavailable.value.detail
+
+
 def test_measurement_runtime_reuses_session_points_calibrates_and_persists(monkeypatch):
     import app.main as main_module
     names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",

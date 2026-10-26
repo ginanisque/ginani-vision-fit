@@ -238,6 +238,7 @@ async def measurement_estimates(
         }
         views_needing_inference = [view for view, points in points_by_view.items() if not points]
         predictions = {}
+        failures = {}
         if views_needing_inference:
             if not external_vision_consent and roboflow_status().get("keypointsReady"):
                 raise HTTPException(
@@ -253,10 +254,14 @@ async def measurement_estimates(
                     points_by_view[view] = normalize_keypoints(
                         prediction["output"], images[view].shape[1], images[view].shape[0],
                     )
-        failures = {
-            view: prediction.get("error", prediction.get("reason", "keypoint workflow unavailable"))
-            for view, prediction in predictions.items() if prediction.get("status") != "complete"
-        }
+                    if not points_by_view[view]:
+                        failures[view] = (
+                            "Roboflow workflow completed but returned no supported named keypoints"
+                        )
+                else:
+                    failures[view] = prediction.get(
+                        "error", prediction.get("reason", "keypoint workflow unavailable"),
+                    )
         if not any(points_by_view.values()):
             reason = "; ".join(f"{view}: {message}" for view, message in failures.items())
             raise HTTPException(503, "Tailoring keypoints are unavailable. " + reason)

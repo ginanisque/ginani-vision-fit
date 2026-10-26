@@ -99,7 +99,7 @@ export function QualityResult({
       ) : measurementEstimate ? <p className="muted">Capture evidence requires review; estimates remain unapproved.</p> : null}
 
       {!measurementEstimate && canEstimate && (
-        <p className="muted">Keypoint measurement inference was not run. Opt in to Roboflow processing on the consent screen to request an estimate.</p>
+        <p className="muted">Measurement estimates require tailoring keypoints from Roboflow. Image quality and posture checks alone do not generate measurements.</p>
       )}
 
       {measurementEstimate && <section className="estimate-panel" aria-label="Measurement estimates">

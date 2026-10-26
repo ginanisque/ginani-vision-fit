@@ -27,6 +27,21 @@ CALIBRATION_REFERENCES = {
 }
 
 
+def _point_name(item: dict) -> str:
+    name = next((str(item[field]) for field in POINT_NAME_FIELDS if item.get(field)), "")
+    if name:
+        return name
+    if (
+        item.get("class")
+        and "class_id" in item
+        and "width" not in item
+        and "height" not in item
+        and "keypoints" not in item
+    ):
+        return str(item["class"])
+    return ""
+
+
 def reference_scale_mm_per_pixel(image: np.ndarray, kind: str) -> tuple[float, dict]:
     """Detect a high-contrast rectangular reference and return its physical scale.
 
@@ -98,7 +113,7 @@ def normalize_keypoints(payload: object, width: int, height: int) -> dict[str, T
     found: dict[str, TailoringPoint] = {}
 
     def add(item: dict) -> None:
-        name = next((str(item[field]) for field in POINT_NAME_FIELDS if item.get(field)), "")
+        name = _point_name(item)
         if not name or "x" not in item or "y" not in item:
             return
         try:
@@ -134,7 +149,7 @@ def normalize_keypoints(payload: object, width: int, height: int) -> dict[str, T
             if isinstance(keypoints, list):
                 named = sum(
                     isinstance(item, dict)
-                    and any(item.get(field) for field in POINT_NAME_FIELDS)
+                    and bool(_point_name(item))
                     and "x" in item and "y" in item
                     for item in keypoints
                 )
@@ -153,7 +168,10 @@ def normalize_keypoints(payload: object, width: int, height: int) -> dict[str, T
                 find_instances(child)
 
     find_instances(payload)
-    walk(max(instances, key=lambda item: item[0])[1] if instances else payload)
+    if instances:
+        walk(max(instances, key=lambda item: item[0])[1])
+    else:
+        walk(payload)
     return found
 
 
