@@ -4,7 +4,11 @@ import pytest
 
 import numpy as np
 
-from app.circumference import CORE_KEYS, _apply_profile, _width_at, ellipse_perimeter
+from app.circumference import (
+    CORE_KEYS, _apply_profile, _image_evidence, _width_at, ellipse_perimeter,
+    estimate_back_measurements,
+)
+from app.posture import Landmark
 
 
 def test_ellipse_perimeter_is_circle_when_width_equals_depth():
@@ -49,3 +53,30 @@ def test_versioned_profile_corrects_raw_geometry_and_exposes_mae():
 def test_profile_rejects_non_physical_corrections():
     with pytest.raises(ValueError, match="waist"):
         _apply_profile("waist", 800, {"factor": {"waist": -1}}, 45)
+
+
+def test_back_width_uses_pose_constrained_torso_instead_of_arm_extent(monkeypatch):
+    import app.circumference as circumference
+
+    image = np.zeros((100, 100, 3), np.uint8)
+    silhouette = np.zeros((100, 100), np.uint8)
+    silhouette[5:95, 39:62] = 255
+    silhouette[34:37, 5:96] = 255
+    landmarks = {
+        "left_shoulder": Landmark(0.39, 0.25, 1.0),
+        "right_shoulder": Landmark(0.61, 0.25, 1.0),
+        "left_hip": Landmark(0.41, 0.65, 1.0),
+        "right_hip": Landmark(0.59, 0.65, 1.0),
+    }
+    monkeypatch.setattr(circumference, "_silhouette", lambda *_args: silhouette)
+    monkeypatch.setattr(circumference, "view_orientation", lambda _landmarks: "back")
+
+    expected_widths, _, _, subject_height_px = _image_evidence(image, landmarks)
+    result = estimate_back_measurements(image, 1800, landmarks)
+    across_back = next(item for item in result["measurements"] if item["key"] == "across_back")
+    arm_row = silhouette[35] > 0
+    arm_extent_px = np.flatnonzero(arm_row)[-1] - np.flatnonzero(arm_row)[0] + 1
+    unbounded_silhouette_width_cm = arm_extent_px * 1800 / subject_height_px / 10
+
+    assert across_back["value"] == pytest.approx(expected_widths["across_chest"] * 1800 / subject_height_px / 10)
+    assert across_back["value"] < unbounded_silhouette_width_cm

@@ -26,7 +26,11 @@ calibration. For a complete, quality-passing slow turn, the service selects the 
 front, side, and back frames and runs the experimental MediaPipe/OpenCV geometry estimator using
 entered height for scale. Those estimates are saved to the linked measurement table as review-only
 candidates; reviewed values are never overwritten by a new video run. Video-derived candidates are
-not validated against professional tape measurements.
+not validated against professional tape measurements. Across-back width is constrained by the
+detected shoulder/hip landmarks using the same body-width geometry as the still-photo estimator,
+so arm silhouette is not treated as torso width. The customer selects metric (cm) or imperial
+(inches) alongside height; estimates are displayed in that system while stored values remain
+canonical.
 
 Roboflow is an optional, external keypoint provider. Calls are gated by an additional, per-session
 customer opt-in, separate from the general capture and model-training consent. Segmentation is not

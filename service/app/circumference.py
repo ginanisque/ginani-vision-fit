@@ -311,43 +311,32 @@ def estimate_back_measurements(
         landmarks = estimate_pose(image, load_pose())
     if landmarks is None or view_orientation(landmarks) != "back":
         raise ValueError("A back-facing full-body pose is required")
-    required = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
-    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in required):
-        raise ValueError("Shoulders and hips must be visible in the back-facing frame")
-
-    mask = _silhouette(image, landmarks)
-    rows = np.flatnonzero(np.any(mask > 0, axis=1))
-    if len(rows) < image.shape[0] * 0.35:
-        raise ValueError("The back silhouette is too short for height calibration")
-    scale = height_mm / float(rows[-1] - rows[0] + 1)
+    widths, levels, visibility, subject_height_px = _image_evidence(image, landmarks)
+    scale = height_mm / subject_height_px
     shoulder_y = ((landmarks["left_shoulder"].y + landmarks["right_shoulder"].y) / 2) * image.shape[0]
     hip_y = ((landmarks["left_hip"].y + landmarks["right_hip"].y) / 2) * image.shape[0]
-    shoulder_x = ((landmarks["left_shoulder"].x + landmarks["right_shoulder"].x) / 2) * image.shape[1]
-    hip_x = ((landmarks["left_hip"].x + landmarks["right_hip"].x) / 2) * image.shape[1]
     torso_height = hip_y - shoulder_y
-    across_y = round(shoulder_y + 0.30 * torso_height)
-    across_center_x = round(shoulder_x + 0.30 * (hip_x - shoulder_x))
-    across_back_mm = _width_at(mask, across_y, across_center_x) * scale
+    across_back_mm = widths["across_chest"] * scale
 
     # MediaPipe has no nape or natural-waist point. These reproducible torso
     # fractions are deliberately exposed as estimates rather than landmarks.
     nape_y = shoulder_y - 0.08 * torso_height
     cb_waist_y = shoulder_y + 0.70 * torso_height
     nape_to_waist_mm = abs(cb_waist_y - nape_y) * scale
-    confidence = min(landmarks[name].visibility for name in required) * 0.45
+    confidence = visibility * 0.45
     return {
         "status": "experimental",
         "method": "back-frame OpenCV silhouette + MediaPipe torso levels + height calibration",
         "warning": "Nape and centre-back waist are inferred levels, not native MediaPipe landmarks. Human confirmation is required.",
         "frameLevels": {
-            "acrossBackY": across_y,
+            "acrossBackY": levels["across_chest"],
             "napeY": round(nape_y),
             "centreBackWaistY": round(cb_waist_y),
         },
         "measurements": [
             {
                 "key": "across_back",
-                "displayName": "Across back (xback-right to xback-left)",
+                "displayName": "Across back",
                 "value": float(round(across_back_mm / 10, 1)), "unit": "cm",
                 "confidence": round(confidence, 2), "requiresReview": True,
             },

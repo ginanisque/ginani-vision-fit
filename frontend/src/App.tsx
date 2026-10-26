@@ -197,6 +197,7 @@ export default function App() {
             consent={consent.agreed && consent.acknowledged}
             sessionId={captureSessionId}
             heightMm={Number(height.value) * (height.unit === 'in' ? 25.4 : 10)}
+            measurementUnit={height.unit}
             trainingConsent={consent.training}
             onSessionCreated={setCaptureSessionId}
             onDelete={deleteCaptureData}
@@ -245,6 +246,7 @@ export default function App() {
             checking={checking}
             error={error}
             measurementEstimate={measurementEstimate}
+            measurementUnit={height.unit}
             captureSessionId={captureSessionId}
             onDelete={deleteCaptureData}
             onCheck={runChecks}
@@ -258,6 +260,7 @@ export default function App() {
           consent={true}
           sessionId={captureSessionId}
           heightMm={Number(height.value) * (height.unit === 'in' ? 25.4 : 10)}
+          measurementUnit={height.unit}
           trainingConsent={consent.training}
           onSessionCreated={setCaptureSessionId}
           onDelete={deleteCaptureData}

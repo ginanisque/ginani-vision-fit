@@ -56,6 +56,30 @@ describe('slow-turn workflow', () => {
     expect(coverage.textContent).toContain('complete')
     expect(coverage.textContent).toContain('front, back, side')
   })
+  it('displays back measurements in the selected measurement system', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      id: 'v', view: 'turn', decision: 'review', durationSeconds: 12, samples: [],
+      turnCoverage: {
+        status: 'complete', seenViews: ['back'], missingViews: [], orientations: [],
+        method: 'pose-landmark orientation',
+        backMeasurements: {
+          status: 'experimental', method: 'test', warning: 'Check estimate.',
+          timeSeconds: 5,
+          measurements: [{
+            key: 'across_back', displayName: 'Across back',
+            value: 35, unit: 'cm', confidence: 0.5, requiresReview: true,
+          }],
+        },
+      },
+      reasons: [], scope: 'coverage.',
+    }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TurnVideo consent={true} measurementUnit="in" />)
+    const user = userEvent.setup()
+    await user.upload(screen.getByLabelText(/choose video/i), new File(['video'], 'turn.webm', { type: 'video/webm' }))
+    await user.click(screen.getByRole('button', { name: 'Check video' }))
+    expect(await screen.findByText('13.8 in')).toBeInTheDocument()
+  })
   it('returns the created capture session to the customer workflow', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
       id: 'video-run', view: 'turn', decision: 'review', durationSeconds: 12,

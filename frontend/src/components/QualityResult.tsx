@@ -1,4 +1,5 @@
-import type { CircumferenceEstimate, QualityDecision } from '../types'
+import { convertLength } from '../measurements/units'
+import type { CircumferenceEstimate, HeightUnit, QualityDecision } from '../types'
 
 interface Props {
   previews?: { front: string | null; side: string | null; back: string | null }
@@ -8,13 +9,14 @@ interface Props {
   onCheck: () => void
   onRetake: (view: 'front' | 'side' | 'back') => void
   measurementEstimate?: CircumferenceEstimate | null
+  measurementUnit?: HeightUnit
   captureSessionId?: string
   onDelete?: () => void
 }
 
 export function QualityResult({
   results, checking, error, onCheck, onRetake, previews, measurementEstimate,
-  captureSessionId, onDelete,
+  measurementUnit = 'cm', captureSessionId, onDelete,
 }: Props) {
   if (results.length === 0) {
     return (
@@ -107,8 +109,8 @@ export function QualityResult({
         <div className="measurement-grid">
           {measurementEstimate.measurements.map((measurement) => <article key={measurement.key}>
             <strong>{measurement.displayName}</strong>
-            <span>{measurement.value} {measurement.unit}</span>
-            <small>confidence {Math.round(measurement.confidence * 100)}% · ±{measurement.uncertaintyMm / 10} cm · {measurement.provenance}</small>
+            <span>{convertLength(measurement.value, 'cm', measurementUnit).toFixed(1)} {measurementUnit}</span>
+            <small>confidence {Math.round(measurement.confidence * 100)}% · ±{convertLength(measurement.uncertaintyMm, 'mm', measurementUnit).toFixed(1)} {measurementUnit} · {measurement.provenance}</small>
           </article>)}
         </div>
         <p className="error">{measurementEstimate.warning}</p>

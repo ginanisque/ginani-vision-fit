@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { submitTurnVideoCheck } from '../lib/api'
-import type { VideoDecision } from '../types'
+import { convertLength } from '../measurements/units'
+import type { HeightUnit, VideoDecision } from '../types'
 
 /** Backend limit for turn videos (service/app/main.py). */
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 export function TurnVideo({
-  consent, sessionId, heightMm, trainingConsent, onSessionCreated, onDelete,
+  consent, sessionId, heightMm, trainingConsent, measurementUnit = 'cm', onSessionCreated, onDelete,
 }: {
   consent: boolean
   sessionId?: string
   heightMm?: number
   trainingConsent?: boolean
+  measurementUnit?: HeightUnit
   onSessionCreated?: (sessionId: string) => void
   onDelete?: () => void
 }) {
@@ -128,7 +130,7 @@ export function TurnVideo({
         <div className="measurement-grid">
           {result.turnCoverage.backMeasurements.measurements.map(measurement => <article key={measurement.key}>
             <strong>{measurement.displayName}</strong>
-            <span>{measurement.value} {measurement.unit}</span>
+            <span>{convertLength(measurement.value, 'cm', measurementUnit).toFixed(1)} {measurementUnit}</span>
             <small>confidence {Math.round(measurement.confidence * 100)}% · review required</small>
           </article>)}
         </div>

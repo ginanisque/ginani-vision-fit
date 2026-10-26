@@ -22,24 +22,24 @@ export function HeightStep({
   const canContinue = Boolean(error === null && value.trim() !== '')
   return (
     <section className="step">
-      <h1>Your height</h1>
-      <p>Height is the reference we will use for scale in later measurement milestones.</p>
+      <h1>Height and measurement system</h1>
+      <p>Choose the units you want for your height and measurement results. Height is used to estimate scale.</p>
       <div className="field-row">
         <input
           type="number"
           inputMode="decimal"
           value={value}
           onChange={(e) => onChangeValue(e.target.value)}
-          placeholder="e.g. 165"
+          placeholder={unit === 'cm' ? 'e.g. 165' : 'e.g. 65'}
           aria-label="Height"
         />
         <select
           value={unit}
           onChange={(e) => onChangeUnit(e.target.value as HeightUnit)}
-          aria-label="Unit"
+          aria-label="Measurement system"
         >
-          <option value="cm">cm</option>
-          <option value="in">in</option>
+          <option value="cm">Metric (cm)</option>
+          <option value="in">Imperial (inches)</option>
         </select>
       </div>
       {error && (

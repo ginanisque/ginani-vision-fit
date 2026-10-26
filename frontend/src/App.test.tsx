@@ -105,7 +105,9 @@ describe('App', () => {
     await user.click(screen.getByLabelText(/consent to my body video or photos/i))
     await user.click(screen.getByLabelText(/understand why captures/i))
     await user.click(screen.getByRole('button', { name: /continue/i }))
-    await user.type(screen.getByLabelText(/height/i), '165')
+    await user.selectOptions(screen.getByLabelText(/measurement system/i), 'in')
+    await user.type(screen.getByLabelText(/height/i), '65')
+    expect(screen.getByLabelText(/measurement system/i)).toHaveValue('in')
     await user.click(screen.getByRole('button', { name: /continue/i }))
 
     expect(screen.getByRole('heading', { name: /one slow-turn video/i })).toBeInTheDocument()
