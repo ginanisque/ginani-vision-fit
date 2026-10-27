@@ -61,18 +61,18 @@ Endpoints:
   (image). Returns a decision record (VF-0, exposure + blur only; 20 MiB limit).
 - `POST /api/capture` — authenticated multipart form: `view` + `consent` + `file`. Consent-gated
   exposure/blur, contrast-silhouette framing, cord candidate and pose-landmark
-  posture evidence (VF-2).
+  posture evidence (VF-2). Still images are reference evidence only; this endpoint does not run
+  Roboflow tailoring-point inference or generate measurements.
 - `POST /api/turn-video` — authenticated multipart form: `consent`, optional `height_mm`,
   optional `training_consent`, and `file` (video). Duration, sampled exposure/blur and
   pose-orientation turn coverage are checked. Complete, quality-passing turns produce experimental
   MediaPipe/OpenCV estimates from selected front/side/back frames, saved review-only to the linked
-  measurement table. Quality uncertainty is sent to human review rather than automatically rejected.
-- `POST /api/measurement-estimates` — authenticated multipart form: `consent`, `height_mm`,
-  `external_vision_consent`, `front`, `side`, and `back`. Runs the tailoring-keypoint workflow only
-  when the customer separately consents to Roboflow processing, executes each published
-  ordered path, and returns segment evidence, confidence, blocked paths, and a targeted review
-  action. With `session_id`, it reuses stored keypoints and persists candidates into the linked
-  measurement table. It does not use silhouette labels as measurement points.
+  measurement table. Existing torso circumferences are supplemented by experimental neck, upper
+  arm, thigh and calf circumference candidates, arm length, side waist-to-knee length, and the
+  left-to-right shoulder width. Every candidate requires human tape confirmation.
+- `POST /api/measurement-estimates` — returns `410 Gone`. Still-image estimates based on
+  unvalidated tailoring points are disabled; use the slow-turn video endpoint for experimental
+  candidates. Manual measurement entry remains available.
 - `GET  /api/decisions` — Neon-backed capture analyses (admin only).
 - `GET  /api/measurements/definitions` — versioned backend measurement registry.
 - `POST /api/measurement-tables` — create a pending measurement table for a subject.
@@ -80,8 +80,9 @@ Endpoints:
 - `PUT  /api/measurement-tables/{id}/measurements/{key}` — record an estimated or reviewed value.
 - `GET  /api/admin/measurement-paths` — list published and draft ordered keypoint paths.
 - `PUT  /api/admin/measurement-paths/{key}/draft` — create or update an admin path draft.
-- `POST /api/admin/measurement-paths/{key}/publish` — publish an immutable path version; existing
-  measurement-table rows retain their original definition version.
+- `POST /api/admin/measurement-paths/{key}/publish` — currently returns `409` until tailoring
+  point labels are validated against tape measurements. Historical published versions remain
+  archived for review.
 - `DELETE /api/capture-sessions/{id}` — remove the authenticated caller's photos, analysis data and
   linked measurement table.
 
@@ -106,11 +107,17 @@ cd visionfit/service
   by default (`VISIONFIT_RETENTION_DAYS=30`), or sooner through the authenticated delete endpoint.
 - Values are stored canonically in millimetres; estimated values require confidence and admin review.
 
-## VF-3 calibration training
+## Measurement-estimate status
 
-VF-3 runtime geometry is the sum of calibrated segments between annotated tailoring keypoints.
-The body outline is used only to establish each view's pixel scale. Missing keypoint segments block
-a measurement; the service never falls back silently to the old ellipse approximation.
+Still photos are reference evidence only and are not sent to Roboflow or used to calculate
+measurements. The legacy still-image measurement endpoint returns `410 Gone`, and the ordered
+Roboflow tailoring-point paths are archived/manual-only until validated against tape measurements.
+Complete slow-turn videos can produce experimental OpenCV/MediaPipe candidates, including
+circumferences and lengths; all candidates are review-only and must be confirmed with a tape.
+
+The video estimator uses pose landmarks, silhouette widths, and height scaling. Its calibration
+profile is separate from the archived tailoring-point paths and must be trained from professionally
+measured labels before its accuracy can be claimed.
 
 The geometry estimator is intentionally separate from learned correction. Save professionally
 measured labels in CSV columns named `raw_<measurement>_mm` and `tape_<measurement>_mm`, with one

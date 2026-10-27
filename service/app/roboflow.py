@@ -13,6 +13,24 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import cv2
+import numpy as np
+
+from .path_estimation import normalize_keypoints
+
+
+def _collapsed_keypoint_output(output: object, image: bytes) -> bool:
+    decoded = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+    if decoded is None:
+        return True
+    points = normalize_keypoints(output, decoded.shape[1], decoded.shape[0])
+    if len(points) < 2:
+        return True
+    xs = [point.x for point in points.values()]
+    ys = [point.y for point in points.values()]
+    spread = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys)))
+    return spread < max(4.0, min(decoded.shape[:2]) * 0.02)
+
 
 def _truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
@@ -99,6 +117,12 @@ def analyze_measurement_capture(image: bytes) -> dict:
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {name: executor.submit(_run_workflow, workflow, image) for name, workflow in workflows.items()}
         outputs = {name: future.result() for name, future in futures.items()}
+    keypoints = outputs.get("keypoints")
+    if keypoints and keypoints.get("status") == "complete" and _collapsed_keypoint_output(keypoints.get("output"), image):
+        outputs["keypoints"] = {
+            "status": "failed",
+            "error": "Roboflow returned collapsed or insufficient named keypoints.",
+        }
     return {
         **status,
         "status": "complete" if all(item["status"] == "complete" for item in outputs.values()) else "failed",
@@ -112,4 +136,10 @@ def analyze_keypoint_capture(image: bytes) -> dict:
     if not status["keypointsReady"]:
         return {**status, "status": "disabled"}
     result = _run_workflow(os.environ["ROBOFLOW_KEYPOINT_WORKFLOW_ID"].strip(), image)
+    if result.get("status") == "complete" and _collapsed_keypoint_output(result.get("output"), image):
+        return {
+            **status,
+            "status": "failed",
+            "error": "Roboflow returned collapsed or insufficient named keypoints; no measurements were produced.",
+        }
     return {**status, **result}

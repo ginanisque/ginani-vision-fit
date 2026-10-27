@@ -1,13 +1,14 @@
 # Ginani VisionFit — technical report
 
-**Status:** working prototype; production keypoint inference and human measurement validation are
-not yet verified.
+**Status:** working prototype; measurement candidates remain experimental and require human tape
+validation.
 
 ## Problem and users
 
-VisionFit guides a customer through consent, height entry, and front/side/back image capture. It
-aims to give garment specialists traceable body-landmark and measurement evidence rather than
-presenting an unreviewed image-derived number as a tailoring measurement.
+VisionFit guides a customer through consent, height entry, and one slow-turn video. Optional
+front/side/back stills provide reference evidence for human review only. The system aims to give
+garment specialists traceable posture and measurement evidence rather than presenting an
+unreviewed image-derived number as a tailoring measurement.
 
 ## System design
 
@@ -20,29 +21,26 @@ Neon Object Storage. The data flow and review/recapture loop are shown in
 
 The container pins `opencv-python-headless==5.0.0.93` (OpenCV 5.0.0). OpenCV handles image decode,
 exposure and blur checks, framing evidence, and video sampling. MediaPipe Pose supplies posture and
-turn-orientation landmarks. Still-photo measurement geometry uses administrator-published ordered
-COCO v6 keypoint paths; body outlines are used only for capture evidence and height-based scale
-calibration. For a complete, quality-passing slow turn, the service selects the clearest detected
-front, side, and back frames and runs the experimental MediaPipe/OpenCV geometry estimator using
-entered height for scale. Those estimates are saved to the linked measurement table as review-only
-candidates; reviewed values are never overwritten by a new video run. Video-derived candidates are
-not validated against professional tape measurements. Across-back width is constrained by the
-detected shoulder/hip landmarks using the same body-width geometry as the still-photo estimator,
-so arm silhouette is not treated as torso width. The customer selects metric (cm) or imperial
-(inches) alongside height; estimates are displayed in that system while stored values remain
-canonical.
+turn-orientation landmarks. For a complete, quality-passing slow turn, the service selects clear
+front, side, and back frames and runs the experimental geometry estimator using entered height for
+scale. It emits torso circumference candidates plus neck, upper arm, thigh, calf, shoulder-width,
+arm-length, and side-waist-to-knee candidates where their image evidence is sufficient. Candidates
+are review-only; existing reviewed values are never overwritten. The new limb estimates are not
+validated against professional tape measurements and may be absent when pose or silhouette evidence
+is insufficient.
 
-Roboflow is an optional, external keypoint provider. Calls are gated by an additional, per-session
-customer opt-in, separate from the general capture and model-training consent. Segmentation is not
-part of the measurement path. Provider API credentials and workflow identifiers are injected into
-ECS from AWS Secrets Manager; the browser receives neither.
+The legacy still-photo estimate route returns `410 Gone`. Optional stills are retained for review
+only, and capture endpoints do not send them to Roboflow. The Roboflow integration now rejects
+collapsed/insufficient keypoint outputs; ordered paths reject collapsed segments and degenerate
+closed loops. Migration 010 archives published tailoring-point paths and makes their definitions
+manual-only until the labels have been validated against tape measurements. The administrator path
+publisher is also disabled during that period.
 
 ## Decisions, review, and safety
 
 The capture workflow converts low-quality evidence into recapture requests and uncertain evidence
-into human review. The estimate endpoint returns segment-level provenance, confidence, blocked paths,
-and a targeted manual check. It always marks estimates as requiring review. Underbust circumference
-remains manual until a separate closed keypoint loop is defined. A human tape measurement is still
+into human review. Video estimates always require review. Existing tailoring definitions remain
+available for manual tape entry; underbust remains manual. A human tape measurement is still
 required; the system has no validated accuracy claim or export approval path.
 
 Customers can delete a capture session and its linked measurement table immediately. By default,
@@ -58,18 +56,17 @@ Secrets Manager keys, update workflow, CORS settings, and live smoke tests are i
 [`../service/migrations/README.md`](../service/migrations/README.md).
 
 The deployment update script can target an existing ECS Express service using `ECS_SERVICE_ARN`.
-It injects the Roboflow settings from Secrets Manager and sets the retention worker on. Production
-must receive migration 008 and a new ECS deployment before the new consent schema and keypoint
-configuration are active.
+Production must receive migration 010 and a new ECS deployment for the manual-only tailoring paths
+and disabled still-estimate route to match this code.
 
 ## Evaluation and limitations
 
 Automated tests cover API authorization and consent, upload bounds, image-quality failure cases,
-keypoint normalization/path execution, missing-path blocking, unit conversions, and frontend capture
-behavior. They use synthetic fixtures and do not measure real-person accuracy. Posture, framing,
-camera position, cord placement, height calibration and the measurement paths remain provisional.
-No evaluation against professional tape measurements is available.
+Roboflow collapse rejection, degenerate path blocking, video geometry candidates, unit conversions,
+and frontend capture behavior. They use synthetic fixtures and do not measure real-person accuracy.
+Posture, framing, camera position, cord placement, height calibration and the video estimator remain
+provisional. No evaluation against professional tape measurements is available.
 
 The reproducible test commands and evidence limitations are recorded in
-[`EVALUATION.md`](./EVALUATION.md). Production endpoint reachability is not evidence that the remote
-Roboflow workflow is configured or that an authenticated customer capture succeeds.
+[`EVALUATION.md`](./EVALUATION.md). Production endpoint reachability is not evidence of measurement
+accuracy or successful tape validation.

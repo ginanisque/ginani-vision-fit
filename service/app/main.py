@@ -19,19 +19,17 @@ from .auth import SessionUser, current_user, require_admin, router as auth_route
 from .capture_store import (
     admin_capture_session, admin_capture_sessions, delete_capture_session, ensure_session,
     persist_analysis, purge_expired_capture_sessions, recent_decisions,
-    session_tailoring_keypoints,
 )
 from .database import database_health
 from .measurements import (
-    REGISTRY_VERSION, persist_runtime_estimates, persist_video_estimates,
-    published_measurement_paths, router as measurements_router,
+    persist_video_estimates, router as measurements_router,
 )
-from .roboflow import analyze_keypoint_capture, configuration_status as roboflow_status
+from .roboflow import configuration_status as roboflow_status
 from .circumference import (
     _apply_profile, _load_calibration_profile, estimate_back_measurements,
     estimate_circumferences,
 )
-from .path_estimation import calculate_ordered_path, normalize_keypoints, reference_scale_mm_per_pixel, view_scale_mm_per_pixel
+from .path_estimation import reference_scale_mm_per_pixel, view_scale_mm_per_pixel
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +128,10 @@ def health() -> dict:
         key: value for key, value in roboflow_status().items()
         if key not in ("keypointWorkflow", "segmentationWorkflow")
     }
+    vision["measurementPathEnabled"] = False
+    vision["measurementPathReason"] = (
+        "Roboflow tailoring-point paths remain disabled until their labels are validated against tape measurements."
+    )
     return {"status": "ok", "opencv": cv2.__version__, "database": "ok" if database_health() else "unavailable",
             "measurementVision": vision}
 
@@ -195,156 +197,18 @@ MAX_CAPTURE_BYTES = 20 * 1024 * 1024
 
 
 @app.post('/api/measurement-estimates')
-async def measurement_estimates(
-    consent: bool = Form(False), height_mm: float = Form(...),
-    external_vision_consent: bool = Form(False),
-    session_id: str | None = Form(None),
-    front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
-    user: SessionUser = Depends(current_user),
-    calibration_kind: Annotated[str | None, Form()] = None,
-    calibration_reference: Annotated[UploadFile | None, File()] = None,
-) -> dict:
-    """Execute published ordered tailoring-keypoint paths across three calibrated views."""
-    if not consent:
-        raise HTTPException(403, 'Explicit consent is required before processing')
-    if not 1000 <= height_mm <= 2500:
-        raise HTTPException(422, 'Height must be between 1000 and 2500 mm')
-    images = {}
-    encoded = {}
-    for view, upload in (("front", front), ("side", side), ("back", back)):
-        data = await upload.read(MAX_CAPTURE_BYTES + 1)
-        if len(data) > MAX_CAPTURE_BYTES:
-            raise HTTPException(413, 'Image exceeds 20 MiB')
-        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
-        if image is None or min(image.shape[:2]) < MIN_DIMENSION:
-            raise HTTPException(400, 'Select decodable front, side and back images at least 64 pixels in each dimension')
-        images[view] = image
-        encoded[view] = data
-    calibration_image = None
-    if calibration_reference is not None:
-        if not calibration_kind:
-            raise HTTPException(422, 'Choose the calibration reference type')
-        data = await calibration_reference.read(MAX_CAPTURE_BYTES + 1)
-        if len(data) > MAX_CAPTURE_BYTES:
-            raise HTTPException(413, 'Calibration image exceeds 20 MiB')
-        calibration_image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR) if data else None
-        if calibration_image is None or min(calibration_image.shape[:2]) < MIN_DIMENSION:
-            raise HTTPException(400, 'Select a decodable calibration image at least 64 pixels in each dimension')
-        if calibration_image.shape[:2] != images["front"].shape[:2]:
-            raise HTTPException(422, 'Calibration and clean front images must use the same resolution')
-    try:
-        stored = session_tailoring_keypoints(user, session_id) if session_id else {}
-    except PermissionError as error:
-        raise HTTPException(404, str(error)) from error
-    try:
-        from concurrent.futures import ThreadPoolExecutor
-        points_by_view = {
-            view: normalize_keypoints(stored.get(view, []), images[view].shape[1], images[view].shape[0])
-            for view in images
-        }
-        views_needing_inference = [view for view, points in points_by_view.items() if not points]
-        predictions = {}
-        failures = {}
-        if views_needing_inference:
-            if not external_vision_consent and roboflow_status().get("keypointsReady"):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Separate consent is required to send images to Roboflow for keypoint detection",
-                )
-            with ThreadPoolExecutor(max_workers=len(views_needing_inference)) as executor:
-                futures = {view: executor.submit(analyze_keypoint_capture, encoded[view])
-                           for view in views_needing_inference}
-                predictions = {view: future.result() for view, future in futures.items()}
-            for view, prediction in predictions.items():
-                if prediction.get("status") == "complete":
-                    points_by_view[view] = normalize_keypoints(
-                        prediction["output"], images[view].shape[1], images[view].shape[0],
-                    )
-                    if not points_by_view[view]:
-                        failures[view] = (
-                            "Roboflow workflow completed but returned no supported named keypoints"
-                        )
-                else:
-                    failures[view] = prediction.get(
-                        "error", prediction.get("reason", "keypoint workflow unavailable"),
-                    )
-        if not any(points_by_view.values()):
-            reason = "; ".join(f"{view}: {message}" for view, message in failures.items())
-            raise HTTPException(503, "Tailoring keypoints are unavailable. " + reason)
-        scales = {}
-        scale_failures = {}
-        calibration = {"status": "not_provided", "method": "height"}
-        for view, image in images.items():
-            try:
-                scales[view] = view_scale_mm_per_pixel(image, height_mm)
-            except ValueError as error:
-                scale_failures[view] = str(error)
-        if calibration_image is not None and calibration_kind:
-            try:
-                scales["front"], evidence = reference_scale_mm_per_pixel(calibration_image, calibration_kind)
-                calibration = {"status": "accepted", "method": "known front-view reference", **evidence}
-                scale_failures.pop("front", None)
-            except ValueError as error:
-                calibration = {"status": "rejected", "method": "height fallback", "reason": str(error)}
-        results = [calculate_ordered_path(path, points_by_view, scales) for path in published_measurement_paths()]
-        estimated = [result for result in results if result["status"] == "estimated"]
-        blocked = [result for result in results if result["status"] == "blocked"]
-        profile = _load_calibration_profile()
-        measurements = []
-        persisted_estimates = []
-        for result in estimated:
-            default_mae = 45.0 if result["pathType"] == "circumference" else 30.0
-            value_mm, uncertainty_mm = _apply_profile(result["key"], result["valueMm"], profile, default_mae)
-            persisted_estimates.append({**result, "valueMm": round(value_mm, 2)})
-            measurements.append({
-                "key": result["key"], "displayName": result["displayName"],
-                "value": round(value_mm / 10, 1), "unit": "cm",
-                "rawValueMm": result["valueMm"], "uncertaintyMm": round(uncertainty_mm, 1),
-                "confidence": result["confidence"], "requiresReview": True,
-                "sourceViews": result["sourceViews"], "provenance": "published ordered tailoring-keypoint path",
-                "orderedPoints": result["orderedPoints"], "segments": result["segments"],
-                "pathVersion": result["pathVersion"], "pathVersionId": result["pathVersionId"],
-            })
-        persistence = (persist_runtime_estimates(user=user, session_id=session_id,
-                                                 estimates=persisted_estimates,
-                                                 model_version=profile["version"])
-                       if session_id else None)
-        target = min(measurements, key=lambda item: item["confidence"]) if measurements else None
-        if blocked:
-            action = "Recapture or correct the view-specific keypoints listed under blocked measurements."
-            manual_check = {"key": blocked[0]["key"], "displayName": blocked[0]["displayName"],
-                            "reason": "Missing required segment evidence"}
-        else:
-            action = f"Confirm {target['displayName']} with a tape." if target else "No automated paths are available."
-            manual_check = ({"key": target["key"], "displayName": target["displayName"],
-                             "reason": "Lowest keypoint confidence"} if target else
-                            {"key": "capture", "displayName": "Capture", "reason": "No automated paths"})
-        return {
-            "status": "review_required", "modelVersion": profile["version"],
-            "keypointWorkflowVersion": os.getenv("ROBOFLOW_KEYPOINT_WORKFLOW_ID") or "stored-capture-points",
-            "registryVersion": REGISTRY_VERSION, "method": "published ordered tailoring-keypoint paths + calibration profile",
-            "warning": "Keypoint path lengths are review-only until validated against professional tape measurements.",
-            "orientations": {"front": "front", "side": "side", "back": "back"},
-            "levels": {"front": {}, "side": {}, "back": {}},
-            "trainingFeatures": {"heightMm": height_mm, "rawMeasurementsMm": {item["key"]: item["rawValueMm"] for item in measurements}},
-            "recommendedAction": action, "targetedManualCheck": manual_check,
-            "measurements": measurements, "blockedMeasurements": blocked,
-            "detectedKeypoints": {view: sorted(points) for view, points in points_by_view.items()},
-            "predictionFailures": failures, "scaleFailures": scale_failures,
-            "calibration": calibration,
-            **(persistence or {}),
-        }
-    except HTTPException:
-        raise
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
+async def measurement_estimates() -> dict:
+    raise HTTPException(
+        410,
+        "Still-image tailoring-point estimates are disabled until those points are validated. "
+        "Stills are reference evidence only; use the slow-turn video workflow.",
+    )
 
 
 @app.post('/api/capture')
 async def capture(
     view: str = Form(...), consent: bool = Form(False), session_id: str | None = Form(None),
     height_mm: float | None = Form(None), training_consent: bool = Form(False),
-    external_vision_consent: bool = Form(False),
     file: UploadFile = File(...), user: SessionUser = Depends(current_user),
 ) -> dict:
     if not consent:
@@ -353,20 +217,17 @@ async def capture(
         raise HTTPException(400, 'view must be front, side or back')
     try:
         capture_session_id = ensure_session(
-            user, session_id, height_mm, training_consent, external_vision_consent,
+            user, session_id, height_mm, training_consent, False,
         )
     except PermissionError as error:
         raise HTTPException(404, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    return await _process_capture_upload(
-        user, capture_session_id, view, file, external_vision_consent,
-    )
+    return await _process_capture_upload(user, capture_session_id, view, file)
 
 
 async def _process_capture_upload(
     user: SessionUser, capture_session_id, view: str, file: UploadFile,
-    external_vision_consent: bool = False,
 ) -> dict:
     data = await file.read(MAX_CAPTURE_BYTES + 1)
     if len(data) > MAX_CAPTURE_BYTES:
@@ -375,17 +236,10 @@ async def _process_capture_upload(
     if image is None or min(image.shape[:2]) < MIN_DIMENSION:
         raise HTTPException(400, 'Select a decodable image at least 64 pixels in each dimension')
     record = await asyncio.to_thread(capture_decision, view, image, data)
-    record["measurementVision"] = (
-        await asyncio.to_thread(analyze_keypoint_capture, data) if external_vision_consent
-        else {"status": "not_consented", "provider": "roboflow_workflows"}
-    )
-    keypoint_model = record["measurementVision"]
-    if keypoint_model.get("status") == "complete":
-        tailoring_points = normalize_keypoints(keypoint_model.get("output", {}), image.shape[1], image.shape[0])
-        record.setdefault("evidence", []).extend({
-            "kind": "tailoring-keypoint", "label": point.key, "confidence": point.confidence,
-            "box": {"x": round(point.x), "y": round(point.y), "width": 2, "height": 2},
-        } for point in tailoring_points.values())
+    record["measurementVision"] = {
+        "status": "reference_only",
+        "reason": "Still images are retained as human-review evidence and are not used to estimate measurements.",
+    }
     persisted = await asyncio.to_thread(
         persist_analysis, user=user, session_id=capture_session_id, view=view, data=data,
         content_type=file.content_type or "application/octet-stream", record=record,
@@ -400,7 +254,6 @@ async def _process_capture_upload(
 async def capture_batch(
     consent: bool = Form(False), session_id: str | None = Form(None),
     height_mm: float | None = Form(None), training_consent: bool = Form(False),
-    external_vision_consent: bool = Form(False),
     front: UploadFile = File(...), side: UploadFile = File(...), back: UploadFile = File(...),
     user: SessionUser = Depends(current_user),
 ) -> dict:
@@ -409,7 +262,7 @@ async def capture_batch(
         raise HTTPException(403, 'Explicit consent is required before processing')
     try:
         capture_session_id = ensure_session(
-            user, session_id, height_mm, training_consent, external_vision_consent,
+            user, session_id, height_mm, training_consent, False,
         )
     except PermissionError as error:
         raise HTTPException(404, str(error)) from error
@@ -419,7 +272,7 @@ async def capture_batch(
     try:
         for view, upload in (("front", front), ("side", side), ("back", back)):
             results.append(await _process_capture_upload(
-                user, capture_session_id, view, upload, external_vision_consent,
+                user, capture_session_id, view, upload,
             ))
     except Exception:
         # A newly-created batch must not leave private captures in a session ID

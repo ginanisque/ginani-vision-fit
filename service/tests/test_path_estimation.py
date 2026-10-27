@@ -64,11 +64,13 @@ def test_normalizes_workflow_outputs_with_class_named_keypoints():
 def test_executes_closed_bust_path_in_published_order():
     names = ["bust_level_left_side", "bust_point_left", "bust_level_center_front",
              "bust_point_right", "bust_level_right_side", "bust_level_center_back"]
-    front = normalize_keypoints([{"name": name, "x": index * 10, "y": 10, "confidence": .9}
-                                 for index, name in enumerate(names[:-1])], 100, 100)
+    front = normalize_keypoints([
+        {"name": name, "x": index * 10, "y": 0 if index in (1, 2, 3) else 10, "confidence": .9}
+        for index, name in enumerate(names[:-1])
+    ], 100, 100)
     back = normalize_keypoints([
-        {"name": "bust_level_right_side", "x": 50, "y": 10, "confidence": .8},
-        {"name": "bust_level_center_back", "x": 25, "y": 10, "confidence": .8},
+        {"name": "bust_level_right_side", "x": 40, "y": 10, "confidence": .8},
+        {"name": "bust_level_center_back", "x": 25, "y": 20, "confidence": .8},
         {"name": "bust_level_left_side", "x": 0, "y": 10, "confidence": .8},
     ], 100, 100)
     result = calculate_ordered_path({
@@ -78,7 +80,7 @@ def test_executes_closed_bust_path_in_published_order():
         "requiredViews": ["front", "back"],
     }, {"front": front, "back": back}, {"front": 2.0, "back": 2.0})
     assert result["status"] == "estimated"
-    assert result["valueMm"] == pytest.approx(180)
+    assert result["valueMm"] == pytest.approx(sum(item["lengthMm"] for item in result["segments"]), abs=0.02)
     assert [segment["view"] for segment in result["segments"]][-2:] == ["back", "back"]
 
 
@@ -92,6 +94,36 @@ def test_blocks_instead_of_inventing_a_missing_segment():
     }, {"front": points}, {"front": 1.0})
     assert result["status"] == "blocked"
     assert result["missingSegments"] == [{"from": "a_point", "to": "b_point", "view": "front"}]
+
+
+def test_blocks_a_collapsed_keypoint_segment():
+    points = normalize_keypoints([
+        {"name": "a_point", "x": 40, "y": 40},
+        {"name": "b_point", "x": 40, "y": 40},
+    ], 100, 100)
+    result = calculate_ordered_path({
+        "id": "test-v1", "measurementKey": "test", "displayName": "Test",
+        "path": "straight", "closed": False, "orderedPoints": ["a_point", "b_point"],
+        "segmentViews": ["front"], "requiredViews": ["front"],
+    }, {"front": points}, {"front": 1.0})
+    assert result["status"] == "blocked"
+    assert result["invalidSegments"] == [{"from": "a_point", "to": "b_point", "view": "front"}]
+
+
+def test_blocks_a_collapsed_closed_path():
+    points = normalize_keypoints([
+        {"name": "point_a", "x": 10, "y": 10},
+        {"name": "point_b", "x": 20, "y": 20},
+        {"name": "point_c", "x": 30, "y": 30},
+    ], 100, 100)
+    result = calculate_ordered_path({
+        "id": "test-v1", "measurementKey": "test", "displayName": "Test",
+        "path": "circumference", "closed": True,
+        "orderedPoints": ["point_a", "point_b", "point_c"],
+        "segmentViews": ["front", "front", "front"], "requiredViews": ["front"],
+    }, {"front": points}, {"front": 1.0})
+    assert result["status"] == "blocked"
+    assert result["invalidGeometry"] is True
 
 
 def test_selects_one_person_instead_of_mixing_instances():

@@ -4,8 +4,9 @@ This deploys the **processing API** as a container on Amazon ECS Express Mode. T
 remain hosted separately and call this API. The service runs OpenCV 5 and MediaPipe Pose, verifies
 Neon Auth JWTs, writes application data to Neon Postgres, and stores captures privately in Neon
 Object Storage. ECS receives credentials from AWS Secrets Manager rather than from the image.
-The VF-3 runtime calls the configured Roboflow keypoint Workflow and executes published ordered
-COCO v6 paths; segmentation is optional and is never used as a measurement-point sequence.
+Still photos are reference evidence only and are not sent to Roboflow. Legacy ordered tailoring
+paths are archived/manual-only until tape-validated; complete slow-turn videos can return
+experimental OpenCV/MediaPipe candidates for human review.
 
 ## Why ECS Express Mode
 
@@ -24,10 +25,8 @@ at one task. Review the AWS estimate and grant terms before running it.
   to create them if they are not already present.
 - A Secrets Manager JSON secret whose execution role can read, containing these keys:
   `DATABASE_URL_POOLED`, `NEON_AUTH_BASE_URL`, `NEON_AUTH_JWKS_URL`,
-  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_BUCKET`,
-  `ROBOFLOW_ENABLED`, `ROBOFLOW_API_KEY`, `ROBOFLOW_WORKSPACE`, and
-  `ROBOFLOW_KEYPOINT_WORKFLOW_ID`. Set `ROBOFLOW_ENABLED=true` only after the customer-facing
-  Roboflow disclosure is deployed and the keypoint workflow has been verified.
+  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_BUCKET`.
+  Roboflow settings are not required or used by the current capture workflow.
 - A bash-compatible terminal (WSL or Git Bash on Windows).
 
 ## Deploy the API
@@ -51,10 +50,9 @@ The script creates an ECR repository if needed, builds and pushes the service im
 Express Mode to create or update a one-task service with 1 vCPU, 2 GiB of memory and `/api/health`
 checks. It references individual JSON keys from Secrets Manager and prints no credentials. The execution
 role must allow `secretsmanager:GetSecretValue` for this secret.
-The script injects the Roboflow keypoint settings from the same secret and sets the data-retention
-period. Capture photos are sent to the provider only after the customer separately opts in in the
-consent screen. Capture sessions and linked measurement tables are deleted after 30 inactive days
-by default; a customer can also delete them immediately from the review screen.
+The script sets the data-retention period. The current capture workflow does not send photos or
+videos to Roboflow. Capture sessions and linked measurement tables are deleted after 30 inactive
+days by default; a customer can also delete them immediately from the review screen.
 Creating the load balancer and Fargate task can incur charges even during testing. Delete the ECS
 Express Mode service and its associated resources when the test is over if you do not want it to
 continue running.

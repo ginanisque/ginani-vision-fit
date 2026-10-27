@@ -17,11 +17,13 @@ domain sources in `references/` and Eunice's corrections (which take precedence)
 
 ## Version
 
-`MEASUREMENT_REGISTRY_VERSION = "2.1.0"` (semver). Version 2.1 executes published ordered
-COCO keypoint paths; bump the version on any semantic change.
+`MEASUREMENT_REGISTRY_VERSION = "2.2.0"` (semver). Definitions depending on unvalidated
+tailoring points are retained for manual tape entry only. Still photos are reference evidence;
+automatic candidates come from the slow-turn OpenCV/MediaPipe video estimator.
 
 The core registry contains 13 measurements, including the front/back hip circumference loop.
-Underbust remains a manual core row until its own complete loop is annotated.
+Underbust remains a manual core row until its own complete loop is annotated. Published
+tailoring-point paths are archived until the point labels are validated against tape measurements.
 
 ## Schema
 

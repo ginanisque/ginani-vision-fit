@@ -5,8 +5,8 @@ import pytest
 import numpy as np
 
 from app.circumference import (
-    CORE_KEYS, _apply_profile, _image_evidence, _width_at, ellipse_perimeter,
-    estimate_back_measurements,
+    CORE_KEYS, _apply_profile, _arm_length_mm, _image_evidence, _side_waist_to_knee_mm,
+    _width_at, ellipse_perimeter, estimate_back_measurements, estimate_circumferences,
 )
 from app.posture import Landmark
 
@@ -53,6 +53,99 @@ def test_versioned_profile_corrects_raw_geometry_and_exposes_mae():
 def test_profile_rejects_non_physical_corrections():
     with pytest.raises(ValueError, match="waist"):
         _apply_profile("waist", 800, {"factor": {"waist": -1}}, 45)
+
+
+def test_arm_length_sums_native_shoulder_elbow_wrist_segments():
+    landmarks = {
+        "left_shoulder": Landmark(.2, .2, .9),
+        "left_elbow": Landmark(.2, .4, .9),
+        "left_wrist": Landmark(.2, .7, .9),
+        "right_shoulder": Landmark(.8, .2, .8),
+        "right_elbow": Landmark(.8, .4, .8),
+        "right_wrist": Landmark(.8, .7, .8),
+    }
+
+    length_mm, confidence = _arm_length_mm(landmarks, (1000, 1000, 3), 2)
+
+    assert length_mm == pytest.approx(1000)
+    assert confidence == pytest.approx(.8)
+
+
+def test_side_waist_to_knee_uses_pose_landmarks_and_height_scale():
+    landmarks = {
+        "left_shoulder": Landmark(.45, .2, .9),
+        "right_shoulder": Landmark(.55, .2, .9),
+        "left_hip": Landmark(.47, .5, .9),
+        "right_hip": Landmark(.53, .5, .9),
+        "left_knee": Landmark(.48, .8, .9),
+        "right_knee": Landmark(.52, .8, .9),
+    }
+
+    length_mm, confidence = _side_waist_to_knee_mm(landmarks, (1000, 1000, 3), 1)
+
+    assert length_mm == pytest.approx(390)
+    assert confidence == pytest.approx(.9)
+
+
+def test_video_estimator_adds_experimental_circumferences_and_lengths(monkeypatch):
+    import app.circumference as circumference
+
+    front = np.zeros((100, 100, 3), np.uint8)
+    side = np.zeros_like(front)
+    front_pose = {
+        "left_shoulder": Landmark(.35, .2, .9), "right_shoulder": Landmark(.65, .2, .9),
+        "left_hip": Landmark(.4, .7, .9), "right_hip": Landmark(.6, .7, .9),
+    }
+    side_pose = {
+        "left_shoulder": Landmark(.49, .2, .9), "right_shoulder": Landmark(.51, .2, .9),
+        "left_hip": Landmark(.49, .7, .9), "right_hip": Landmark(.51, .7, .9),
+        "left_knee": Landmark(.49, .9, .9), "right_knee": Landmark(.51, .9, .9),
+    }
+    widths = {name: 20.0 for name in ("bust", "underbust", "waist", "hip", "across_chest")}
+    monkeypatch.setattr(circumference, "load_pose", lambda: object())
+    monkeypatch.setattr(
+        circumference, "estimate_pose",
+        lambda image, _pose: front_pose if image is front else side_pose,
+    )
+    monkeypatch.setattr(
+        circumference, "view_orientation",
+        lambda landmarks: "front" if landmarks is front_pose else "side",
+    )
+    monkeypatch.setattr(
+        circumference, "_image_evidence",
+        lambda *_args: (widths, {"across_chest": 35}, .9, 100.0),
+    )
+    monkeypatch.setattr(circumference, "_part_width", lambda *_args: (5.0, .9))
+    monkeypatch.setattr(circumference, "_arm_length_mm", lambda *_args: (700.0, .9))
+    monkeypatch.setattr(circumference, "_side_waist_to_knee_mm", lambda *_args: (450.0, .8))
+    monkeypatch.setattr(circumference, "_load_calibration_profile", lambda: {
+        "version": "test", "factor": {}, "biasMm": {}, "maeMm": {},
+    })
+
+    result = estimate_circumferences(front, side, 1700)
+    measurements = {item["key"]: item for item in result["measurements"]}
+
+    assert {"neck", "upper_arm", "thigh", "calf", "arm_length", "side_waist_to_knee"} <= measurements.keys()
+    assert measurements["arm_length"]["value"] == pytest.approx(70)
+    assert measurements["side_waist_to_knee"]["value"] == pytest.approx(45)
+    assert all(measurements[key]["requiresReview"] for key in (
+        "neck", "upper_arm", "thigh", "calf", "arm_length", "side_waist_to_knee",
+    ))
+    assert measurements["front_shoulder"]["displayName"] == "Shoulder width (left to right)"
+
+    def missing_upper_arm(_image, _pose, key):
+        if key == "upper_arm":
+            raise ValueError("Upper arm is occluded")
+        return 5.0, .9
+
+    monkeypatch.setattr(circumference, "_part_width", missing_upper_arm)
+    incomplete = estimate_circumferences(front, side, 1700)
+    assert "upper_arm" not in {item["key"] for item in incomplete["measurements"]}
+    assert {
+        "key": "upper_arm",
+        "displayName": "Upper arm circumference",
+        "reason": "Upper arm is occluded",
+    } in incomplete["unavailableMeasurements"]
 
 
 def test_back_width_uses_pose_constrained_torso_instead_of_arm_extent(monkeypatch):

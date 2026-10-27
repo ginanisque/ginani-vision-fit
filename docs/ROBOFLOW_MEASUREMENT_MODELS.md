@@ -1,5 +1,9 @@
 # VisionFit Roboflow measurement models
 
+> These are model-development notes, not a description of the active capture pipeline. Current
+> captures are not sent to Roboflow, and all legacy ordered tailoring-point paths are manual-only
+> until validated against tape measurements.
+
 VisionFit uses two complementary custom models. Generic COCO checkpoints are useful for experiments,
 but they do not supply tailoring landmarks such as bust apex, underbust, natural waist, or floor level.
 
@@ -31,7 +35,7 @@ across_back_right, across_back_left,
 elbow_right, wrist_right, elbow_left, wrist_left
 ```
 
-The published bust path is:
+The historical bust path (archived in the current service) was:
 
 ```text
 bust_level_left_side → bust_point_left → bust_level_center_front →
@@ -87,10 +91,10 @@ waist, shoulder, or length paths.
 
 ## Runtime calculation
 
-For each published definition, the service loads its ordered point names, connects each adjacent pair
-in the administrator-assigned segment view, closes circumference loops, converts pixels to
-millimetres using per-view height calibration, and returns every segment as evidence. If no permitted
-view contains both endpoints, that measurement is blocked.
+The current service does not execute published tailoring-point paths. If a future, tape-validated
+release re-enables them, it must connect each adjacent point in its assigned view, close
+circumference loops, convert pixels to millimetres using per-view height calibration, and block any
+measurement missing an endpoint.
 
 When output contains several people, the runtime selects one complete primary instance before
 normalizing points; it never combines high-confidence points from different people.
@@ -109,9 +113,12 @@ Evaluate by view and landmark, not only one aggregate score:
 Do not release automated values until a held-out validation set establishes acceptable error limits for each
 measurement. Until then, estimates stay review-only.
 
-## Connect trained workflows
+## Future workflow activation gate
 
-Create one Roboflow Workflow for each trained model and configure the backend only:
+Creating workflows and setting these environment variables does not enable them in the current
+capture pipeline. Re-enabling provider processing requires code review, tape-validated measurement
+definitions, customer-facing disclosure, retention review, and data-processing approval first.
+If approved in a future release, configure the backend only:
 
 ```text
 ROBOFLOW_ENABLED=true
@@ -125,6 +132,6 @@ The API key must stay in the backend secret store, never in Vite or browser vari
 AWS Secrets Manager runtime secret before redeploying ECS. Enabling hosted processing uploads consented
 captures to Roboflow, so update the privacy notice, retention terms, and data-processing agreement first.
 
-The backend normalizes common Workflow keypoint output shapes into the exact v6 names, stores detected
-tailoring points, and executes the currently published path version. `front_silhouette`,
+Any future integration must normalize Workflow outputs into the exact v6 names, reject collapsed or
+insufficient keypoints, and keep output review-only until validated. `front_silhouette`,
 `side_silhouette`, and `back_silhouette` are legacy geometry terms and must not be added to a path.

@@ -72,6 +72,8 @@ def test_health_does_not_expose_workflow_ids(monkeypatch) -> None:
     assert response.status_code == 200
     vision = response.json()["measurementVision"]
     assert vision["ready"] is True
+    assert vision["measurementPathEnabled"] is False
+    assert "validated against tape measurements" in vision["measurementPathReason"]
     assert "keypointWorkflow" not in vision
     assert "segmentationWorkflow" not in vision
 

@@ -158,6 +158,11 @@ export function TurnVideo({
           : <p>No new measurements were saved. Existing approved values were left unchanged.</p>}
         {result.measurementEstimates.skippedKeys.length > 0 &&
           <p className="muted">{result.measurementEstimates.skippedKeys.length} values were not updated because their table rows are unavailable or already approved.</p>}
+        {!!result.measurementEstimates.unavailableMeasurements?.length && <div>
+          <h4>Not estimated</h4>
+          <ul>{result.measurementEstimates.unavailableMeasurements.map(item =>
+            <li key={item.key}>{item.displayName}: {item.reason}</li>)}</ul>
+        </div>}
         <p className="muted">{result.measurementEstimates.warning}</p>
       </section>}
       {result.measurementEstimateError && <p className="muted">{result.measurementEstimateError}</p>}

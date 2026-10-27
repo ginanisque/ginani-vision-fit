@@ -11,7 +11,7 @@ import type { MeasurementDefinition } from './types'
  * explicitly and any open question is listed under `ambiguities`.
  */
 
-export const MEASUREMENT_REGISTRY_VERSION = '2.1.0'
+export const MEASUREMENT_REGISTRY_VERSION = '2.2.0'
 
 export const IMAGE_PLANE_WARNING =
   'Image-plane distances are NOT body-surface lengths or circumferences. ' +
@@ -569,6 +569,5 @@ export function getMeasurement(key: string): MeasurementDefinition | undefined {
 export function coreMeasurementKeys(): string[] {
   return CORE_MEASUREMENTS.map((m) => m.key)
 }
-
 
 

@@ -42,18 +42,17 @@ function okResponse(body: unknown): Response {
 const png = () => new File(['fake'], 'image.png', { type: 'image/png' })
 
 async function reachReview(
-  user: ReturnType<typeof userEvent.setup>, container: HTMLElement, externalVision = false,
+  user: ReturnType<typeof userEvent.setup>, container: HTMLElement,
 ) {
   await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
   await user.click(screen.getByRole('button', { name: /start visionfit/i }))
-  await user.click(screen.getByLabelText(/consent to my body video or photos/i))
+  await user.click(screen.getByLabelText(/consent to my slow-turn video/i))
   await user.click(screen.getByLabelText(/understand why captures/i))
-  if (externalVision) await user.click(screen.getByLabelText(/consent to sending still capture photos/i))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   await user.type(screen.getByLabelText(/height/i), '165')
   await user.click(screen.getByRole('button', { name: /continue/i }))
-  await user.click(screen.getByRole('button', { name: /use separate photos instead/i }))
+  await user.click(screen.getByRole('button', { name: /add optional reference photos/i }))
   await user.click(screen.getByRole('button', { name: /continue/i }))
 
   const frontInput = container.querySelector('input[type="file"]') as HTMLInputElement
@@ -90,19 +89,19 @@ describe('App', () => {
     const continueBtn = screen.getByRole('button', { name: /continue/i })
     expect(continueBtn).toBeDisabled()
 
-    await user.click(screen.getByLabelText(/consent to my body video or photos/i))
+    await user.click(screen.getByLabelText(/consent to my slow-turn video/i))
     expect(continueBtn).toBeDisabled()
 
     await user.click(screen.getByLabelText(/understand why captures/i))
     expect(continueBtn).toBeEnabled()
   })
 
-  it('defaults to slow-turn video and keeps still photos as an optional fallback', async () => {
+  it('keeps the slow-turn video primary and makes reference photos optional', async () => {
     const user = userEvent.setup()
     render(<App />)
     await waitFor(() => expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /start visionfit/i }))
-    await user.click(screen.getByLabelText(/consent to my body video or photos/i))
+    await user.click(screen.getByLabelText(/consent to my slow-turn video/i))
     await user.click(screen.getByLabelText(/understand why captures/i))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.selectOptions(screen.getByLabelText(/measurement system/i), 'in')
@@ -112,7 +111,7 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: /one slow-turn video/i })).toBeInTheDocument()
     expect(screen.getByLabelText(/choose video/i)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /use separate photos instead/i }))
+    await user.click(screen.getByRole('button', { name: /add optional reference photos/i }))
     expect(screen.getByRole('heading', { name: /optional scale reference/i })).toBeInTheDocument()
   })
 
@@ -140,7 +139,6 @@ describe('App', () => {
         captureSessionId: 'session-1',
         results: [makeDecision('front', 'proceed'), makeDecision('side', 'proceed'), makeDecision('back', 'proceed')],
       }))
-      .mockRejectedValueOnce(new TypeError('estimate unavailable'))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
@@ -151,31 +149,25 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: /quality passed/i })).toBeInTheDocument()
     expect(screen.getByText(/image quality is acceptable/i)).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
-  it('sends the provider-consent choice with capture and measurement requests', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(okResponse({
-        captureSessionId: 'session-1',
-        results: [makeDecision('front', 'proceed'), makeDecision('side', 'proceed'), makeDecision('back', 'proceed')],
-      }))
-      .mockResolvedValueOnce(okResponse({
-        status: 'review_required', modelVersion: 'test', registryVersion: '2.1.0',
-        method: 'test', warning: 'Review required', orientations: { front: 'front', side: 'side', back: 'back' },
-        levels: { front: {}, side: {}, back: {} }, recommendedAction: 'Review',
-        targetedManualCheck: { key: 'bust', displayName: 'Bust', reason: 'Check' },
-        trainingFeatures: { heightMm: 1650, rawMeasurementsMm: {} }, measurements: [],
-      }))
+  it('keeps reference-photo checks separate from video estimates', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(okResponse({
+      captureSessionId: 'session-1',
+      results: [makeDecision('front', 'proceed'), makeDecision('side', 'proceed'), makeDecision('back', 'proceed')],
+    }))
     vi.stubGlobal('fetch', fetchMock)
 
     const user = userEvent.setup()
     const { container } = render(<App />)
-    await reachReview(user, container, true)
+    await reachReview(user, container)
     await user.click(screen.getByRole('button', { name: /check quality/i }))
 
     await screen.findByRole('heading', { name: /quality passed/i })
-    expect((fetchMock.mock.calls[0][1].body as FormData).get('external_vision_consent')).toBe('true')
-    expect((fetchMock.mock.calls[1][1].body as FormData).get('external_vision_consent')).toBe('true')
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const body = fetchMock.mock.calls[0][1].body as FormData
+    expect(body.get('external_vision_consent')).toBeNull()
   })
 
   it('lets a customer delete their capture session and linked data', async () => {

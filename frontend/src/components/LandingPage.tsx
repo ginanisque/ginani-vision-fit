@@ -5,7 +5,7 @@ interface LandingPageProps {
 const faqs = [
   {
     question: 'What do I need for a VisionFit capture?',
-    answer: 'A phone or camera, a well-lit uncluttered space, fitted clothing, your height, and enough room to take clear front, side, and back photos plus an optional slow-turn video.',
+    answer: 'A phone or camera, a well-lit uncluttered space, fitted clothing, your height, and enough room to record one slow turn. Optional still photos are reference evidence for human review only.',
   },
   {
     question: 'What measurements can VisionFit support?',
@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     question: 'Are my photos sent to another service?',
-    answer: 'Only if you separately opt in to Roboflow keypoint detection. Without that opt-in, VisionFit does not send your photos to Roboflow and does not run keypoint-based measurement inference.',
+    answer: 'No. The current workflow does not send captures to Roboflow. Still photos are reference evidence only; experimental video candidates remain review-only.',
   },
   {
     question: 'Does VisionFit replace a professional fitting?',
@@ -59,7 +59,7 @@ export function LandingPage({ onStart }: LandingPageProps) {
           <p>VisionFit turns a careful capture into structured evidence for garment measurement. The service checks image quality and posture before results reach the review workspace.</p>
           <ol className="process-list">
             <li><span>01</span><div><strong>Prepare</strong><p>Read the privacy notice, give consent, and enter your height for scale.</p></div></li>
-            <li><span>02</span><div><strong>Capture</strong><p>Record or upload one slow turn; VisionFit checks for front, side, and back views. Separate photos remain an optional fallback.</p></div></li>
+            <li><span>02</span><div><strong>Capture</strong><p>Record or upload one slow turn; VisionFit checks for front, side, and back views. Optional still photos are reference evidence for human review only.</p></div></li>
             <li><span>03</span><div><strong>Check</strong><p>Automated checks flag blur, lighting, framing, orientation, and posture concerns.</p></div></li>
             <li><span>04</span><div><strong>Review</strong><p>An authorised specialist reviews landmarks and the resulting measurement table.</p></div></li>
           </ol>
@@ -88,7 +88,7 @@ export function LandingPage({ onStart }: LandingPageProps) {
           <h2>Your body data deserves careful handling.</h2>
         </div>
         <div>
-          <p>VisionFit requires sign-in and explicit capture consent. Images and video are kept in private storage, while database records hold controlled references and analysis metadata. Keypoint detection uses Roboflow only after a separate opt-in; captures and linked measurement results are deleted after 30 inactive days by default.</p>
+          <p>VisionFit requires sign-in and explicit capture consent. Images and video are kept in private storage, while database records hold controlled references and analysis metadata. Captures are not sent to Roboflow; still photos are reviewer evidence only, and video-derived candidates require human tape confirmation. Captures and linked measurement results are deleted after 30 inactive days by default.</p>
           <p className="fine-print">Only submit images of yourself, or of a person who has knowingly consented. Measurement output is an estimate until it has been reviewed.</p>
         </div>
       </section>

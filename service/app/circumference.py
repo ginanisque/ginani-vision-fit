@@ -30,6 +30,9 @@ CORE_KEYS = (
     "front_shoulder", "back_shoulder", "across_chest", "across_back",
     "nape_to_waist", "full_front_length",
 )
+ADDITIONAL_VIDEO_KEYS = (
+    "neck", "upper_arm", "thigh", "calf", "arm_length", "side_waist_to_knee",
+)
 
 
 def _load_calibration_profile() -> dict:
@@ -171,6 +174,133 @@ def _image_evidence(image: np.ndarray, landmarks: dict[str, Landmark]) -> tuple[
     return widths, levels, visibility, subject_height_px
 
 
+def _part_width(
+    image: np.ndarray, landmarks: dict[str, Landmark], part: str,
+) -> tuple[float, float]:
+    """Estimate a single cross-section width near MediaPipe pose joints."""
+    required = {
+        "neck": ("left_shoulder", "right_shoulder", "left_hip", "right_hip"),
+        "upper_arm": ("left_shoulder", "right_shoulder", "left_elbow", "right_elbow"),
+        "thigh": ("left_hip", "right_hip", "left_knee", "right_knee"),
+        "calf": ("left_knee", "right_knee", "left_ankle", "right_ankle"),
+    }
+    if part not in required:
+        raise ValueError(f"Unknown body cross-section: {part}")
+    names = required[part]
+    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in names):
+        raise ValueError(f"Pose joints are not visible for {part} circumference")
+
+    height, width = image.shape[:2]
+    mask = _silhouette(image, landmarks)
+    if part == "neck":
+        shoulder_y = (landmarks["left_shoulder"].y + landmarks["right_shoulder"].y) / 2 * height
+        hip_y = (landmarks["left_hip"].y + landmarks["right_hip"].y) / 2 * height
+        torso_height = hip_y - shoulder_y
+        samples = [(
+            round(shoulder_y - torso_height * 0.08),
+            round((landmarks["left_shoulder"].x + landmarks["right_shoulder"].x) / 2 * width),
+        )]
+        plausible_fraction = (0.025, 0.16)
+    else:
+        joints = {
+            "upper_arm": (("left_shoulder", "left_elbow"), ("right_shoulder", "right_elbow")),
+            "thigh": (("left_hip", "left_knee"), ("right_hip", "right_knee")),
+            "calf": (("left_knee", "left_ankle"), ("right_knee", "right_ankle")),
+        }[part]
+        samples = []
+        for start_name, end_name in joints:
+            start, end = landmarks[start_name], landmarks[end_name]
+            samples.append((
+                round((start.y + end.y) / 2 * height),
+                round((start.x + end.x) / 2 * width),
+            ))
+        plausible_fraction = {
+            "upper_arm": (0.035, 0.18),
+            "thigh": (0.06, 0.28),
+            "calf": (0.035, 0.18),
+        }[part]
+
+    widths = []
+    for y, center_x in samples:
+        try:
+            candidate = _width_at(mask, y, center_x)
+        except ValueError:
+            continue
+        fraction = candidate / height
+        if plausible_fraction[0] <= fraction <= plausible_fraction[1]:
+            widths.append(candidate)
+    if not widths:
+        raise ValueError(f"No credible silhouette cross-section is available for {part}")
+    confidence = min(landmarks[name].visibility for name in names)
+    return float(np.median(widths)), confidence
+
+
+def _pose_segment_length(
+    landmarks: dict[str, Landmark], point_names: tuple[str, ...],
+    image_shape: tuple[int, ...], scale_mm_per_pixel: float,
+) -> tuple[float, float]:
+    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in point_names):
+        raise ValueError("Pose landmarks are not visible for this length")
+    height, width = image_shape[:2]
+    points = [(landmarks[name].x * width, landmarks[name].y * height) for name in point_names]
+    length_px = sum(
+        math.hypot(end[0] - start[0], end[1] - start[1])
+        for start, end in zip(points, points[1:])
+    )
+    if length_px <= 1:
+        raise ValueError("Pose landmarks collapsed to a zero-length path")
+    confidence = min(landmarks[name].visibility for name in point_names)
+    return length_px * scale_mm_per_pixel, confidence
+
+
+def _arm_length_mm(
+    landmarks: dict[str, Landmark], image_shape: tuple[int, ...], scale_mm_per_pixel: float,
+) -> tuple[float, float]:
+    candidates = []
+    for side in ("left", "right"):
+        try:
+            candidates.append(_pose_segment_length(
+                landmarks,
+                (f"{side}_shoulder", f"{side}_elbow", f"{side}_wrist"),
+                image_shape, scale_mm_per_pixel,
+            ))
+        except ValueError:
+            continue
+    if not candidates:
+        raise ValueError("Shoulder, elbow and wrist landmarks are required for arm length")
+    return (
+        float(np.median([value for value, _ in candidates])),
+        min(confidence for _, confidence in candidates),
+    )
+
+
+def _side_waist_to_knee_mm(
+    landmarks: dict[str, Landmark], image_shape: tuple[int, ...], scale_mm_per_pixel: float,
+) -> tuple[float, float]:
+    names = ("left_shoulder", "right_shoulder", "left_hip", "right_hip", "left_knee", "right_knee")
+    if any(name not in landmarks or landmarks[name].visibility < 0.5 for name in names):
+        raise ValueError("Shoulders, hips and knees are required for side waist-to-knee length")
+    height, width = image_shape[:2]
+    shoulder = (
+        (landmarks["left_shoulder"].x + landmarks["right_shoulder"].x) * width / 2,
+        (landmarks["left_shoulder"].y + landmarks["right_shoulder"].y) * height / 2,
+    )
+    hip = (
+        (landmarks["left_hip"].x + landmarks["right_hip"].x) * width / 2,
+        (landmarks["left_hip"].y + landmarks["right_hip"].y) * height / 2,
+    )
+    waist = (hip[0], shoulder[1] + 0.70 * (hip[1] - shoulder[1]))
+    knee = (
+        (landmarks["left_knee"].x + landmarks["right_knee"].x) * width / 2,
+        (landmarks["left_knee"].y + landmarks["right_knee"].y) * height / 2,
+    )
+    length_px = math.hypot(knee[0] - waist[0], knee[1] - waist[1])
+    if length_px <= 1:
+        raise ValueError("Waist and knee landmarks collapsed to a zero-length path")
+    confidence = min(landmarks[name].visibility for name in names)
+    return length_px * scale_mm_per_pixel, confidence
+
+
 def estimate_circumferences(
     front: np.ndarray, side: np.ndarray, height_mm: float, back: np.ndarray | None = None,
 ) -> dict:
@@ -246,13 +376,57 @@ def estimate_circumferences(
         "nape_to_waist": back_torso * 0.78,
     })
 
+    additional_confidences: dict[str, float] = {}
+    additional_sources: dict[str, list[str]] = {}
+    unavailable: dict[str, str] = {}
+    additional_names = {
+        "neck": "Neck circumference",
+        "upper_arm": "Upper arm circumference",
+        "thigh": "Thigh circumference",
+        "calf": "Calf circumference",
+        "arm_length": "Arm length (shoulder to wrist)",
+        "side_waist_to_knee": "Side waist to knee",
+    }
+    for key in ("neck", "upper_arm", "thigh", "calf"):
+        try:
+            front_width_px, front_part_visibility = _part_width(front, front_pose, key)
+            side_width_px, side_part_visibility = _part_width(side, side_pose, key)
+        except ValueError as error:
+            unavailable[key] = str(error)
+            continue
+        front_width_mm = front_width_px * front_scale
+        side_depth_mm = side_width_px * side_scale
+        raw[key] = ellipse_perimeter(front_width_mm, side_depth_mm)
+        feature_rows[key] = {"frontWidthMm": front_width_mm, "sideDepthMm": side_depth_mm}
+        additional_confidences[key] = min(front_part_visibility, side_part_visibility) * 0.3
+        additional_sources[key] = ["front", "side"]
+
+    try:
+        raw["arm_length"], additional_confidences["arm_length"] = _arm_length_mm(
+            front_pose, front.shape, front_scale,
+        )
+        additional_sources["arm_length"] = ["front"]
+    except ValueError as error:
+        unavailable["arm_length"] = str(error)
+    if view_orientation(side_pose) == "side":
+        try:
+            raw["side_waist_to_knee"], additional_confidences["side_waist_to_knee"] = (
+                _side_waist_to_knee_mm(side_pose, side.shape, side_scale)
+            )
+            additional_sources["side_waist_to_knee"] = ["side"]
+        except ValueError as error:
+            unavailable["side_waist_to_knee"] = str(error)
+    else:
+        unavailable["side_waist_to_knee"] = "A side-facing video frame is required for this length"
+
     profile = _load_calibration_profile()
     names = {
         "bust": "Bust", "underbust": "Underbust", "bust_point": "Bust point length",
         "bust_span": "Bust span", "bust_radius": "Bust radius", "waist": "Waist", "hip": "Hip",
-        "front_shoulder": "Front shoulder", "back_shoulder": "Back shoulder",
+        "front_shoulder": "Shoulder width (left to right)", "back_shoulder": "Back shoulder",
         "across_chest": "Across chest", "across_back": "Across back",
         "nape_to_waist": "Nape to waist", "full_front_length": "Full front length",
+        **additional_names,
     }
     inferred = {"bust_point", "bust_span", "bust_radius", "back_shoulder", "nape_to_waist", "full_front_length"}
     source_views = {
@@ -271,17 +445,25 @@ def estimate_circumferences(
         for key in ("back_shoulder", "across_back", "nape_to_waist"):
             confidences[key] = min(back_visibility, 1.0) * (0.38 if key in inferred else 0.52)
     default_mae = {key: (45.0 if key in ("bust", "underbust", "waist", "hip") else 30.0) for key in CORE_KEYS}
+    default_mae.update({key: 45.0 for key in ("neck", "upper_arm", "thigh", "calf")})
+    default_mae.update({"arm_length": 35.0, "side_waist_to_knee": 35.0})
     values = []
-    for key in CORE_KEYS:
+    for key in (*CORE_KEYS, *(key for key in ADDITIONAL_VIDEO_KEYS if key in raw)):
         value_mm, mae_mm = _apply_profile(key, raw[key], profile, default_mae[key])
+        confidence = additional_confidences.get(key, confidences.get(key, 0.0))
         values.append({
             "key": key, "displayName": names[key], "value": round(value_mm / 10, 1), "unit": "cm",
             "rawValueMm": round(raw[key], 1), "uncertaintyMm": round(mae_mm, 1),
-            "confidence": round(max(0.05, min(0.95, confidences[key])), 2),
+            "confidence": round(max(0.05, min(0.95, confidence)), 2),
             "requiresReview": True,
-            "sourceViews": source_views[key],
+            "sourceViews": additional_sources[key] if key in additional_sources else source_views[key],
             "evidence": feature_rows.get(key, {}),
-            "provenance": "inferred anatomical level" if key in inferred else "measured multi-view geometry",
+            "provenance": (
+                "experimental pose-joint path" if key in ("arm_length", "side_waist_to_knee")
+                else "experimental silhouette cross-section" if key in ("neck", "upper_arm", "thigh", "calf")
+                else "inferred anatomical level" if key in inferred
+                else "measured multi-view geometry"
+            ),
         })
     lowest = min(values, key=lambda item: item["confidence"])
     return {
@@ -297,6 +479,10 @@ def estimate_circumferences(
         "recommendedAction": f"Confirm {lowest['displayName']} with a tape, then retain the correction as labelled training data.",
         "targetedManualCheck": {"key": lowest["key"], "displayName": lowest["displayName"],
                                 "reason": "Lowest confidence in this profile"},
+        "unavailableMeasurements": [
+            {"key": key, "displayName": additional_names[key], "reason": reason}
+            for key, reason in unavailable.items()
+        ],
         "measurements": values,
     }
 

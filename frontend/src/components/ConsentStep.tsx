@@ -13,10 +13,10 @@ export function ConsentStep({ consent, onChange, onContinue }: Props) {
       <h1>Consent &amp; privacy</h1>
       <p>Before we begin, please confirm you understand how your captures will be used.</p>
       <ul className="privacy-list">
-        <li>Your slow-turn video or optional photos and measurements are used to build your measurement profile.</li>
+        <li>The slow-turn video is the primary source for experimental, review-only measurement candidates. Optional still photos are reference evidence for human review only.</li>
         <li>Captures are stored privately and are never sold or shared publicly.</li>
         <li>Capture media and linked measurement results are automatically deleted after 30 days. You can delete them sooner after submitting a capture.</li>
-        <li>Roboflow keypoint detection is not used by the slow-turn estimate path. Still photos are sent to Roboflow only if you separately opt in below.</li>
+        <li>Still photos are not sent to Roboflow and are not used to calculate measurements.</li>
       </ul>
       <label className="check">
         <input
@@ -24,7 +24,7 @@ export function ConsentStep({ consent, onChange, onContinue }: Props) {
           checked={consent.agreed}
           onChange={(e) => onChange({ ...consent, agreed: e.target.checked })}
         />
-        <span>I consent to my body video or photos being processed for measurement estimation.</span>
+        <span>I consent to my slow-turn video being processed for experimental measurement estimates.</span>
       </label>
       <label className="check">
         <input
@@ -33,14 +33,6 @@ export function ConsentStep({ consent, onChange, onContinue }: Props) {
           onChange={(e) => onChange({ ...consent, acknowledged: e.target.checked })}
         />
         <span>I understand why captures are needed and how they will be handled.</span>
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={consent.externalVision}
-          onChange={(e) => onChange({ ...consent, externalVision: e.target.checked })}
-        />
-        <span>Optional: I consent to sending still capture photos to Roboflow for tailoring-keypoint detection.</span>
       </label>
       <label className="check">
         <input

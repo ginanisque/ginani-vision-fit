@@ -1,5 +1,4 @@
-import { convertLength } from '../measurements/units'
-import type { CircumferenceEstimate, HeightUnit, QualityDecision } from '../types'
+import type { QualityDecision } from '../types'
 
 interface Props {
   previews?: { front: string | null; side: string | null; back: string | null }
@@ -8,15 +7,12 @@ interface Props {
   error: string | null
   onCheck: () => void
   onRetake: (view: 'front' | 'side' | 'back') => void
-  measurementEstimate?: CircumferenceEstimate | null
-  measurementUnit?: HeightUnit
   captureSessionId?: string
   onDelete?: () => void
 }
 
 export function QualityResult({
-  results, checking, error, onCheck, onRetake, previews, measurementEstimate,
-  measurementUnit = 'cm', captureSessionId, onDelete,
+  results, checking, error, onCheck, onRetake, previews, captureSessionId, onDelete,
 }: Props) {
   if (results.length === 0) {
     return (
@@ -41,8 +37,6 @@ export function QualityResult({
   }
 
   const allProceed = results.every((r) => r.decision === 'proceed')
-  const canEstimate = results.length === 3 && results.every((r) => r.decision !== 'recapture')
-
   return (
     <section className="step">
       <h1>{allProceed ? 'Quality passed' : results.some(r => r.decision === 'recapture') ? 'Recapture needed' : 'Review needed'}</h1>
@@ -91,42 +85,12 @@ export function QualityResult({
       </ul>
 
       {allProceed ? (
-        <>
-          <p className="success">Image quality is acceptable.</p>
-        </>
-      ) : !canEstimate ? (
+        <p className="success">Image quality is acceptable.</p>
+      ) : (
         <p className="error" role="alert">
-          Follow the requests above. Review results remain blocked; they are not approved for measurement or export.
+          Follow the requests above. These still photos are reference evidence only; measurement estimates come from the slow-turn video.
         </p>
-      ) : measurementEstimate ? <p className="muted">Capture evidence requires review; estimates remain unapproved.</p> : null}
-
-      {!measurementEstimate && canEstimate && (
-        <p className="muted">Measurement estimates require tailoring keypoints from Roboflow. Image quality and posture checks alone do not generate measurements.</p>
       )}
-
-      {measurementEstimate && <section className="estimate-panel" aria-label="Measurement estimates">
-        <h2>Measurement estimates — review required</h2>
-        <div className="measurement-grid">
-          {measurementEstimate.measurements.map((measurement) => <article key={measurement.key}>
-            <strong>{measurement.displayName}</strong>
-            <span>{convertLength(measurement.value, 'cm', measurementUnit).toFixed(1)} {measurementUnit}</span>
-            <small>confidence {Math.round(measurement.confidence * 100)}% · ±{convertLength(measurement.uncertaintyMm, 'mm', measurementUnit).toFixed(1)} {measurementUnit} · {measurement.provenance}</small>
-          </article>)}
-        </div>
-        <p className="error">{measurementEstimate.warning}</p>
-        <p className="muted">{measurementEstimate.recommendedAction}</p>
-        {measurementEstimate.calibration?.status === 'accepted' &&
-          <p className="success">Front-view scale calibrated with {measurementEstimate.calibration.kind?.replace('ruler_12in', '1-foot ruler')}.</p>}
-        {measurementEstimate.calibration?.status === 'rejected' &&
-          <p className="error">The reference could not be used ({measurementEstimate.calibration.reason}); front scale fell back to height.</p>}
-        {measurementEstimate.measurementTableId &&
-          <p className="success">Saved to the linked measurement table for admin review.</p>}
-        <p className="muted">Submitted views: front {measurementEstimate.orientations.front}; side {measurementEstimate.orientations.side}; back {measurementEstimate.orientations.back}.</p>
-        {!!measurementEstimate.blockedMeasurements?.length && <div className="blocked-measurements">
-          <h3>Blocked measurements</h3>
-          <ul>{measurementEstimate.blockedMeasurements.map(item => <li key={item.key}><strong>{item.displayName}</strong>: missing {item.missingSegments.map(segment => `${segment.from} → ${segment.to} (${segment.view})`).join(', ')}</li>)}</ul>
-        </div>}
-      </section>}
 
       {!allProceed && (
         <div className="actions">

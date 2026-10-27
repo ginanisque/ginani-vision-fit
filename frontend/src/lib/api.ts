@@ -1,4 +1,4 @@
-import type { AnalysisDecisionDto, AuthSession, CalibrationKind, CaptureSessionDetailDto, CaptureSessionSummaryDto, CircumferenceEstimate, CustomerDto, MeasurementDefinitionDto, MeasurementPathDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
+import type { AnalysisDecisionDto, AuthSession, CalibrationKind, CaptureSessionDetailDto, CaptureSessionSummaryDto, CustomerDto, MeasurementDefinitionDto, MeasurementPathDto, MeasurementReadinessDto, MeasurementTableDto, QualityDecision, VideoDecision } from '../types'
 import { authClient, bearerToken } from './auth-client'
 
 export interface SubmitOptions {
@@ -67,13 +67,12 @@ async function authenticatedFetch(path: string, init: RequestInit): Promise<Resp
 
 export async function submitCaptureCheck(
   image: File, view: 'front' | 'side' | 'back', consent: boolean, trainingConsent: boolean,
-  externalVisionConsent: boolean, sessionId?: string, heightMm?: number,
+  sessionId?: string, heightMm?: number,
 ): Promise<QualityDecision> {
   const form = new FormData()
   form.append('view', view)
   form.append('consent', String(consent))
   form.append('training_consent', String(trainingConsent))
-  form.append('external_vision_consent', String(externalVisionConsent))
   form.append('file', image)
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
@@ -90,7 +89,6 @@ export async function submitCaptureCheck(
 
 export async function submitCaptureBatch(
   front: File, side: File, back: File, consent: boolean, trainingConsent: boolean,
-  externalVisionConsent: boolean,
   sessionId?: string, heightMm?: number,
 ): Promise<{ captureSessionId: string; results: QualityDecision[] }> {
   const form = new FormData()
@@ -99,7 +97,6 @@ export async function submitCaptureBatch(
   form.append('back', back)
   form.append('consent', String(consent))
   form.append('training_consent', String(trainingConsent))
-  form.append('external_vision_consent', String(externalVisionConsent))
   if (sessionId) form.append('session_id', sessionId)
   if (heightMm) form.append('height_mm', String(heightMm))
   let response: Response
@@ -109,33 +106,6 @@ export async function submitCaptureBatch(
     throw networkError('/api/captures')
   }
   if (!response.ok) throw new Error(`Capture check failed (${response.status}): ${await response.text()}`)
-  return await response.json()
-}
-
-export async function submitMeasurementEstimate(
-  front: File, side: File, back: File, heightMm: number, consent: boolean,
-  externalVisionConsent: boolean, sessionId?: string,
-  calibration?: { kind: CalibrationKind; file: File },
-): Promise<CircumferenceEstimate> {
-  const form = new FormData()
-  form.append('front', front)
-  form.append('side', side)
-  form.append('back', back)
-  form.append('height_mm', String(heightMm))
-  form.append('consent', String(consent))
-  form.append('external_vision_consent', String(externalVisionConsent))
-  if (sessionId) form.append('session_id', sessionId)
-  if (calibration) {
-    form.append('calibration_kind', calibration.kind)
-    form.append('calibration_reference', calibration.file)
-  }
-  let response: Response
-  try {
-    response = await authenticatedFetch('/api/measurement-estimates', { method: 'POST', body: form })
-  } catch {
-    throw networkError('/api/measurement-estimates')
-  }
-  if (!response.ok) throw new Error(`Measurement estimate failed (${response.status}): ${await response.text()}`)
   return await response.json()
 }
 

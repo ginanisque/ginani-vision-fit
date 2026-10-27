@@ -155,7 +155,6 @@ export type Step = 'consent' | 'height' | 'video' | 'calibration' | 'front' | 's
 export interface ConsentState {
   agreed: boolean
   acknowledged: boolean
-  externalVision: boolean
   /** Optional opt-in to allow captures to be used to train the measurement model. */
   training: boolean
 }
@@ -215,58 +214,6 @@ export interface QualityDecision {
   analysisRunId?: string
 }
 
-export interface CircumferenceEstimate {
-  status: 'review_required'
-  modelVersion: string
-  registryVersion: string
-  method: string
-  warning: string
-  orientations: { front: string; side: string; back: string }
-  levels: { front: Record<string, number>; side: Record<string, number>; back: Record<string, number> }
-  recommendedAction: string
-  targetedManualCheck: { key: string; displayName: string; reason: string }
-  measurementTableId?: string
-  persistedKeys?: string[]
-  skippedKeys?: string[]
-  calibration?: {
-    status: 'not_provided' | 'accepted' | 'rejected'
-    method: string
-    kind?: CalibrationKind
-    scaleMmPerPixel?: number
-    reason?: string
-  }
-  trainingFeatures: { heightMm: number; rawMeasurementsMm: Record<string, number> }
-  blockedMeasurements?: Array<{
-    key: string
-    displayName: string
-    status: 'blocked'
-    missingSegments: Array<{ from: string; to: string; view: 'front' | 'side' | 'back' }>
-  }>
-  measurements: Array<{
-    key: string
-    displayName: string
-    value: number
-    unit: 'cm'
-    rawValueMm: number
-    uncertaintyMm: number
-    confidence: number
-    requiresReview: true
-    sourceViews: Array<'front' | 'side' | 'back'>
-    provenance: string
-    evidence?: Record<string, number>
-    orderedPoints?: string[]
-    segments?: Array<{
-      from: string
-      to: string
-      view: 'front' | 'side' | 'back'
-      lengthMm: number
-      confidence: number
-    }>
-    pathVersion?: number
-    pathVersionId?: string
-  }>
-}
-
 export interface TurnCoverage {
   status: 'complete' | 'incomplete' | 'unknown'
   seenViews: string[]
@@ -313,6 +260,7 @@ export interface VideoDecision {
     persistedKeys: string[]
     skippedKeys: string[]
     measurements: Array<{ key: string; displayName: string; value: number; unit: 'cm'; confidence: number }>
+    unavailableMeasurements?: Array<{ key: string; displayName: string; reason: string }>
     warning: string
   }
   measurementEstimateError?: string

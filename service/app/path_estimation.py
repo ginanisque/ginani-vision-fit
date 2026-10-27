@@ -201,6 +201,7 @@ def calculate_ordered_path(
         pairs.append((points[-1], points[0]))
     segments = []
     missing = []
+    collapsed = []
     total_mm = 0.0
     segment_views = list(definition.get("segmentViews", []))
     if len(segment_views) != len(pairs):
@@ -218,6 +219,9 @@ def calculate_ordered_path(
             continue
         confidence, view, start_point, end_point = max(candidates, key=lambda item: item[0])
         pixel_length = math.hypot(end_point.x - start_point.x, end_point.y - start_point.y)
+        if pixel_length <= 1.0:
+            collapsed.append({"from": start, "to": end, "view": view})
+            continue
         length_mm = pixel_length * scales_by_view[view]
         total_mm += length_mm
         segments.append({
@@ -229,6 +233,22 @@ def calculate_ordered_path(
     if missing:
         return {"key": definition["measurementKey"], "displayName": definition["displayName"],
                 "status": "blocked", "missingSegments": missing, "segments": segments}
+    if collapsed:
+        return {"key": definition["measurementKey"], "displayName": definition["displayName"],
+                "status": "blocked", "reason": "Collapsed keypoints cannot define a measurement path",
+                "invalidSegments": collapsed, "segments": segments}
+    if definition["closed"]:
+        polygon = [points_by_view[view][name] for name, view in
+                   zip(points, [segment_views[0], *segment_views[:-1]])]
+        area = abs(sum(
+            polygon[index].x * polygon[(index + 1) % len(polygon)].y
+            - polygon[(index + 1) % len(polygon)].x * polygon[index].y
+            for index in range(len(polygon))
+        )) / 2
+        if area <= 1.0:
+            return {"key": definition["measurementKey"], "displayName": definition["displayName"],
+                    "status": "blocked", "reason": "Collapsed keypoints cannot define a closed measurement path",
+                    "invalidGeometry": True, "segments": segments}
     confidence = min(segment["confidence"] for segment in segments)
     return {
         "key": definition["measurementKey"], "displayName": definition["displayName"],

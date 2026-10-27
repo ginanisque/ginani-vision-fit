@@ -13,6 +13,7 @@ from app.measurements import (
     _from_mm,
     _to_mm,
     measurement_definitions,
+    publish_measurement_path,
     persist_video_estimates,
     set_measurement_value,
     validate_measurement_path,
@@ -36,6 +37,14 @@ def test_registry_exposes_versioned_domain_definitions():
     assert waist["requiredLandmarks"] == [
         "waist_left_side", "waist_center_front", "waist_right_side", "waist_center_back",
     ]
+    assert {item["calculation"] for item in body["definitions"]} == {"manual_only"}
+
+
+def test_unvalidated_tailoring_paths_cannot_be_published():
+    with pytest.raises(HTTPException) as unavailable:
+        run(publish_measurement_path("bust", ADMIN))
+    assert unavailable.value.status_code == 409
+    assert "validated against tape measurements" in unavailable.value.detail
 
 
 def test_measurements_use_millimetres_as_canonical_unit():

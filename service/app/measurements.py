@@ -21,7 +21,7 @@ Unit = Literal["mm", "cm", "in"]
 View = Literal["front", "side", "back"]
 Status = Literal["pending", "estimated", "reviewed", "unavailable"]
 
-REGISTRY_VERSION = "2.1.0"
+REGISTRY_VERSION = "2.2.0"
 BODY_MEASUREMENT_POLICY = (
     "Exact body measurement — no garment ease or seam allowance. "
     "Ease is controlled in Pattern CAD."
@@ -47,20 +47,20 @@ class MeasurementDefinition:
 
 
 DEFINITIONS = (
-    MeasurementDefinition("bust", "Bust", "core", "Circumference", "circumference", ("front", "back"), ("bust_level_left_side", "bust_point_left", "bust_level_center_front", "bust_point_right", "bust_level_right_side", "bust_level_center_back"), "ordered_keypoint_path", ("bust", "full bust"), "bust"),
-    MeasurementDefinition("underbust", "Underbust", "core", "Circumference", "circumference", ("front", "side"), ("underbust_left", "underbust_right"), "manual_or_future_circumference", ("under bust", "underbust"), "underBust"),
-    MeasurementDefinition("bust_point", "Bust point length", "core", "Bust control", "surface", ("front", "side"), ("side_neck_left", "bust_point_left"), "ordered_keypoint_path", ("bust point", "bust point length"), None),
-    MeasurementDefinition("bust_span", "Bust span", "core", "Bust control", "straight", ("front",), ("bust_point_left", "bust_point_right"), "ordered_keypoint_path", ("bust span",), None),
-    MeasurementDefinition("bust_radius", "Bust radius", "core", "Bust control", "straight", ("front", "side"), ("bust_point_left", "underbust_left"), "ordered_keypoint_path", ("bust radius",), None),
-    MeasurementDefinition("waist", "Waist", "core", "Circumference", "circumference", ("front", "back"), ("waist_left_side", "waist_center_front", "waist_right_side", "waist_center_back"), "ordered_keypoint_path", ("waist", "natural waist"), "waist"),
-    MeasurementDefinition("hip", "Hip", "core", "Circumference", "circumference", ("front", "back"), ("hip_side_left", "hip_center_front", "hip_side_right", "hip_center_back"), "ordered_keypoint_path", ("hip", "full hip", "seat"), "hip"),
-    MeasurementDefinition("front_shoulder", "Front shoulder", "core", "Upper body width", "straight", ("front",), ("shoulder_point_left", "shoulder_point_right"), "ordered_keypoint_path", ("front shoulder", "shoulder width", "across shoulder"), "shoulder"),
-    MeasurementDefinition("back_shoulder", "Back shoulder", "core", "Upper body width", "surface", ("back",), ("shoulder_point_left", "shoulder_point_right"), "ordered_keypoint_path", ("back shoulder",), "shoulder"),
-    MeasurementDefinition("across_chest", "Across chest", "core", "Upper body width", "surface", ("front",), ("across_chest_left", "across_chest_right"), "ordered_keypoint_path", ("across chest", "chest width"), "acrossChest"),
-    MeasurementDefinition("across_back", "Across back", "core", "Upper body width", "surface", ("back",), ("across_back_left", "across_back_right"), "ordered_keypoint_path", ("across back",), None),
-    MeasurementDefinition("nape_to_waist", "Nape to waist", "core", "Vertical length", "straight", ("back",), ("nape", "waist_center_back"), "ordered_keypoint_path", ("nape to waist", "back length"), "napeToWaist"),
-    MeasurementDefinition("full_front_length", "Full front length", "core", "Vertical length", "surface", ("front", "side"), ("side_neck_left", "bust_point_left", "waist_below_bust_left"), "ordered_keypoint_path", ("full front length",), None),
-    MeasurementDefinition("side_waist_to_knee", "Side waist to knee", "future", "Lower body length", "surface", ("side",), ("waist_right_side", "knee_right"), "ordered_keypoint_path", ("side waist to knee", "waist to knee"), "sideWaistToKnee"),
+    MeasurementDefinition("bust", "Bust", "core", "Circumference", "circumference", ("front", "back"), ("bust_level_left_side", "bust_point_left", "bust_level_center_front", "bust_point_right", "bust_level_right_side", "bust_level_center_back"), "manual_only", ("bust", "full bust"), "bust"),
+    MeasurementDefinition("underbust", "Underbust", "core", "Circumference", "circumference", ("front", "side"), ("underbust_left", "underbust_right"), "manual_only", ("under bust", "underbust"), "underBust"),
+    MeasurementDefinition("bust_point", "Bust point length", "core", "Bust control", "surface", ("front", "side"), ("side_neck_left", "bust_point_left"), "manual_only", ("bust point", "bust point length"), None),
+    MeasurementDefinition("bust_span", "Bust span", "core", "Bust control", "straight", ("front",), ("bust_point_left", "bust_point_right"), "manual_only", ("bust span",), None),
+    MeasurementDefinition("bust_radius", "Bust radius", "core", "Bust control", "straight", ("front", "side"), ("bust_point_left", "underbust_left"), "manual_only", ("bust radius",), None),
+    MeasurementDefinition("waist", "Waist", "core", "Circumference", "circumference", ("front", "back"), ("waist_left_side", "waist_center_front", "waist_right_side", "waist_center_back"), "manual_only", ("waist", "natural waist"), "waist"),
+    MeasurementDefinition("hip", "Hip", "core", "Circumference", "circumference", ("front", "back"), ("hip_side_left", "hip_center_front", "hip_side_right", "hip_center_back"), "manual_only", ("hip", "full hip", "seat"), "hip"),
+    MeasurementDefinition("front_shoulder", "Front shoulder", "core", "Upper body width", "straight", ("front",), ("shoulder_point_left", "shoulder_point_right"), "manual_only", ("front shoulder", "shoulder width", "across shoulder"), "shoulder"),
+    MeasurementDefinition("back_shoulder", "Back shoulder", "core", "Upper body width", "surface", ("back",), ("shoulder_point_left", "shoulder_point_right"), "manual_only", ("back shoulder",), "shoulder"),
+    MeasurementDefinition("across_chest", "Across chest", "core", "Upper body width", "surface", ("front",), ("across_chest_left", "across_chest_right"), "manual_only", ("across chest", "chest width"), "acrossChest"),
+    MeasurementDefinition("across_back", "Across back", "core", "Upper body width", "surface", ("back",), ("across_back_left", "across_back_right"), "manual_only", ("across back",), None),
+    MeasurementDefinition("nape_to_waist", "Nape to waist", "core", "Vertical length", "straight", ("back",), ("nape", "waist_center_back"), "manual_only", ("nape to waist", "back length"), "napeToWaist"),
+    MeasurementDefinition("full_front_length", "Full front length", "core", "Vertical length", "surface", ("front", "side"), ("side_neck_left", "bust_point_left", "waist_below_bust_left"), "manual_only", ("full front length",), None),
+    MeasurementDefinition("side_waist_to_knee", "Side waist to knee", "future", "Lower body length", "surface", ("side",), ("waist_right_side", "knee_right"), "manual_only", ("side waist to knee", "waist to knee"), "sideWaistToKnee"),
 )
 DEFINITION_BY_KEY = {definition.key: definition for definition in DEFINITIONS}
 
@@ -198,35 +198,13 @@ async def save_measurement_path_draft(
 
 
 @router.post("/admin/measurement-paths/{key}/publish")
-async def publish_measurement_path(key: str, admin: SessionUser = Depends(require_admin)) -> dict:
-    with connection() as conn:
-        draft = conn.execute(
-            "select id from measurement_definition_versions where measurement_key = %s and status = 'draft' for update",
-            (key,),
-        ).fetchone()
-        if draft is None:
-            raise HTTPException(404, "Save a draft before publishing")
-        definition = conn.execute("select display_name from measurement_definitions where key = %s", (key,)).fetchone()
-        conn.execute("update measurement_definition_versions set status = 'archived' where measurement_key = %s and status = 'published'", (key,))
-        row = conn.execute(
-            """update measurement_definition_versions set status = 'published', published_by = %s, published_at = now()
-                where id = %s returning id, measurement_key, version, status::text, path::text, closed,
-                ordered_points, segment_views, required_views::text[], calculation_method, published_at""",
-            (admin.id, draft["id"]),
-        ).fetchone()
-        conn.execute(
-            """update measurement_definitions d set path = v.path, required_views = v.required_views,
-                    required_landmarks = array(select jsonb_array_elements_text(v.ordered_points)),
-                    calculation_method = v.calculation_method
-                 from measurement_definition_versions v where v.id = %s and d.key = v.measurement_key""",
-            (draft["id"],),
-        )
-        conn.execute(
-            "insert into audit_events (actor_id, entity_type, entity_id, action, after_data) values (%s, 'measurement_definition_version', %s, 'publish', %s)",
-            (admin.id, str(draft["id"]), Jsonb({"measurementKey": key, "version": row["version"]})),
-        )
-    row["display_name"] = definition["display_name"]
-    return _path_json(row)
+async def publish_measurement_path(
+    _key: str, _admin: SessionUser = Depends(require_admin),
+) -> dict:
+    raise HTTPException(
+        409,
+        "Tailoring-point paths are not publishable until their labels are validated against tape measurements.",
+    )
 
 
 def _definition_json(definition: MeasurementDefinition) -> dict:

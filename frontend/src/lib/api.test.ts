@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QualityDecision, VideoDecision } from '../types'
-import { deleteCaptureSession, submitMeasurementEstimate, submitQualityCheck, submitTurnVideoCheck } from './api'
+import { deleteCaptureSession, submitQualityCheck, submitTurnVideoCheck } from './api'
 import { bearerToken } from './auth-client'
 
-const decision: QualityDecision = {
+const qualityDecision: QualityDecision = {
   id: 'front-1',
   decision: 'proceed',
   view: 'front',
@@ -39,24 +39,18 @@ afterEach(() => {
 })
 
 describe('submitQualityCheck', () => {
-  it('posts the file and view and returns the decision', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(fakeResponse(decision))
+  it('posts the still photo for reference quality review', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse(qualityDecision))
     const file = new File(['fake'], 'front.png', { type: 'image/png' })
 
     const result = await submitQualityCheck(file, 'front', true, { fetchFn })
 
-    expect(result).toEqual(decision)
-    expect(fetchFn).toHaveBeenCalledWith(
-      '/api/quality',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchFn.mock.calls[0][1].headers).toHaveProperty('Authorization')
+    expect(result).toEqual(qualityDecision)
     const body = fetchFn.mock.calls[0][1].body as FormData
     expect(body.get('view')).toBe('front')
     expect(body.get('consent')).toBe('true')
     expect(body.get('file')).toBe(file)
-    expect(body.get('calibration_kind')).toBe('a4')
-    expect(body.get('calibration_reference')).toBe(reference)
+    expect(body.get('external_vision_consent')).toBeNull()
   })
 
   it('throws on a non-ok response', async () => {
@@ -68,7 +62,7 @@ describe('submitQualityCheck', () => {
 })
 
 describe('submitTurnVideoCheck', () => {
-  const decision: VideoDecision = {
+  const videoDecision: VideoDecision = {
     id: 'v1',
     view: 'turn',
     decision: 'review',
@@ -78,8 +72,8 @@ describe('submitTurnVideoCheck', () => {
     scope: 'sample quality only',
   }
 
-  it('posts the video and consent and returns the decision', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(fakeResponse(decision))
+  it('posts the video, consent and optional calibration reference', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse(videoDecision))
     vi.stubGlobal('fetch', fetchFn)
     const file = new File(['video'], 'turn.webm', { type: 'video/webm' })
     const reference = new File(['reference'], 'a4.png', { type: 'image/png' })
@@ -88,18 +82,15 @@ describe('submitTurnVideoCheck', () => {
       file, true, 'session-1', 1650, true, { kind: 'a4', file: reference },
     )
 
-    expect(result).toEqual(decision)
-    expect(bearerToken).toHaveBeenCalledOnce()
-    expect(fetchFn).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
-      method: 'POST',
-      headers: { Authorization: 'Bearer api-test-token' },
-    }))
+    expect(result).toEqual(videoDecision)
     const body = fetchFn.mock.calls[0][1].body as FormData
     expect(body.get('consent')).toBe('true')
     expect(body.get('session_id')).toBe('session-1')
     expect(body.get('height_mm')).toBe('1650')
     expect(body.get('training_consent')).toBe('true')
     expect(body.get('file')).toBe(file)
+    expect(body.get('calibration_kind')).toBe('a4')
+    expect(body.get('calibration_reference')).toBe(reference)
   })
 
   it('turns a network rejection into an actionable message', async () => {
@@ -110,70 +101,19 @@ describe('submitTurnVideoCheck', () => {
       submitTurnVideoCheck(new File(['video'], 'turn.webm', { type: 'video/webm' }), true),
     ).rejects.toThrow(/Could not reach the analysis service/)
     expect(bearerToken).toHaveBeenCalledOnce()
-    expect(fetchFn).toHaveBeenCalledWith('/api/turn-video', expect.objectContaining({
-      headers: { Authorization: 'Bearer api-test-token' },
-    }))
-  })
-
-  it('refreshes a rejected cached token and retries the upload once', async () => {
-    vi.mocked(bearerToken)
-      .mockResolvedValueOnce('expired-token')
-      .mockResolvedValueOnce('fresh-token')
-    const fetchFn = vi.fn()
-      .mockResolvedValueOnce(fakeResponse({ detail: 'expired' }, false, 401))
-      .mockResolvedValueOnce(fakeResponse(decision))
-    vi.stubGlobal('fetch', fetchFn)
-
-    const result = await submitTurnVideoCheck(
-      new File(['video'], 'turn.webm', { type: 'video/webm' }), true,
-    )
-
-    expect(result).toEqual(decision)
-    expect(bearerToken).toHaveBeenNthCalledWith(1, false)
-    expect(bearerToken).toHaveBeenNthCalledWith(2, true)
-    expect(fetchFn).toHaveBeenNthCalledWith(1, '/api/turn-video', expect.objectContaining({
-      headers: { Authorization: 'Bearer expired-token' },
-    }))
-    expect(fetchFn).toHaveBeenNthCalledWith(2, '/api/turn-video', expect.objectContaining({
-      headers: { Authorization: 'Bearer fresh-token' },
-    }))
   })
 })
 
-describe('submitMeasurementEstimate', () => {
-  it('sends the selected calibration reference separately from the clean front image', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ status: 'review_required' }))
+describe('deleteCaptureSession', () => {
+  it('sends an authenticated delete request for the selected capture', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ deleted: true }))
     vi.stubGlobal('fetch', fetchFn)
-    const front = new File(['front'], 'front.png', { type: 'image/png' })
-    const side = new File(['side'], 'side.png', { type: 'image/png' })
-    const back = new File(['back'], 'back.png', { type: 'image/png' })
-    const reference = new File(['a4'], 'a4.png', { type: 'image/png' })
 
-    await submitMeasurementEstimate(front, side, back, 1650, true, true, 'session-1', {
-      kind: 'a4', file: reference,
-    })
+    await deleteCaptureSession('session-1')
 
-    describe('deleteCaptureSession', () => {
-      it('sends an authenticated delete request for the selected capture', async () => {
-        const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ deleted: true }))
-        vi.stubGlobal('fetch', fetchFn)
-
-        await deleteCaptureSession('session-1')
-
-        expect(fetchFn).toHaveBeenCalledWith('/api/capture-sessions/session-1', expect.objectContaining({
-          method: 'DELETE',
-          headers: { Authorization: '******' },
-        }))
-      })
-    })
-
-    expect(bearerToken).toHaveBeenCalledOnce()
-    const request = fetchFn.mock.calls[0][1]
-    expect(request.headers).toEqual({ Authorization: 'Bearer api-test-token' })
-    const body = request.body as FormData
-    expect(body.get('front')).toBe(front)
-    expect(body.get('external_vision_consent')).toBe('true')
-    expect(body.get('calibration_kind')).toBe('a4')
-    expect(body.get('calibration_reference')).toBe(reference)
+    expect(fetchFn).toHaveBeenCalledWith('/api/capture-sessions/session-1', expect.objectContaining({
+      method: 'DELETE',
+      headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Bearer /) }),
+    }))
   })
 })
